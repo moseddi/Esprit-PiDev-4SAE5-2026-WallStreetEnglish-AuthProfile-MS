@@ -9,6 +9,7 @@
 		<groupId>tn.esprit</groupId>
 		<artifactId>english-school-platform</artifactId>
 		<version>0.0.1-SNAPSHOT</version>
+		<relativePath>../../pom.xml</relativePath>
 	</parent>
 
 	<artifactId>user-management-service</artifactId>
