@@ -6,7 +6,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestHeader;
 import java.util.List;
 
-@FeignClient(name = "coaching-service", url = "http://localhost:5057", fallback = CoachingServiceFallback.class)
+@FeignClient(name = "Coaching-service", fallback = CoachingServiceFallback.class)
 public interface CoachingServiceClient {
 
     @GetMapping("/Coaching-service/api/reservations/seance/{seanceId}")
