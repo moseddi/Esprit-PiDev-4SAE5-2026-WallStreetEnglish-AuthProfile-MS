@@ -1,0 +1,76 @@
+pipeline {
+    agent any
+
+    environment {
+        SONAR_HOST_URL = 'http://localhost:9000'
+        SONAR_TOKEN = credentials('jenkins-user')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "✅ Code récupéré depuis GitHub (branche userms)"
+            }
+        }
+
+        stage('Install Parent POM') {
+            steps {
+                sh 'mvn clean install -N'
+                echo "✅ Parent POM installé"
+            }
+        }
+
+        stage('Tests - Auth Service') {
+            steps {
+                dir('microservices/auth-service') {
+                    sh 'mvn clean test'
+                }
+                echo "✅ Tests Auth Service passés"
+            }
+        }
+
+        stage('Tests - User Service') {
+            steps {
+                dir('microservices/user-management-service') {
+                    sh 'mvn clean test'
+                }
+                echo "✅ Tests User Service passés"
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('SonarQube') {
+                    dir('microservices/auth-service') {
+                        sh 'mvn sonar:sonar -Dsonar.projectKey=auth-service -Dsonar.projectName="Auth Service" -Dsonar.login=${SONAR_TOKEN}'
+                    }
+                    dir('microservices/user-management-service') {
+                        sh 'mvn sonar:sonar -Dsonar.projectKey=user-service -Dsonar.projectName="User Management Service" -Dsonar.login=${SONAR_TOKEN}'
+                    }
+                }
+                echo "✅ Analyse SonarQube terminée"
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 10, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+                echo "✅ Quality Gate passé"
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "🎉 Pipeline CI terminé avec succès!"
+            echo "📊 Voir les résultats sur: ${SONAR_HOST_URL}"
+        }
+        failure {
+            echo "❌ Pipeline échoué"
+            echo "Vérifie les tests unitaires ou la qualité du code"
+        }
+    }
+}
