@@ -7,6 +7,7 @@ pipeline {
     }
 
     stages {
+
         stage('Checkout') {
             steps {
                 checkout scm
@@ -23,21 +24,43 @@ pipeline {
             }
         }
 
+        // ✏️ CHANGED: 'mvn clean test' → 'mvn clean verify'
+        // 'verify' runs tests AND generates the JaCoCo XML coverage report
+        // that SonarQube needs to display coverage (was 0.0% before)
         stage('Tests - Auth Service') {
             steps {
                 dir('Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main/microservices/auth-service') {
-                    sh 'mvn clean test'
+                    sh 'mvn clean verify'
                 }
                 echo "✅ Tests Auth Service passés"
             }
+            post {
+                always {
+                    // ✏️ ADDED: publishes test results in Jenkins UI (Test Results tab)
+                    junit(
+                        testResults: 'Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main/microservices/auth-service/target/surefire-reports/*.xml',
+                        allowEmptyResults: true
+                    )
+                }
+            }
         }
 
+        // ✏️ CHANGED: same as above for user-management-service
         stage('Tests - User Service') {
             steps {
                 dir('Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main/microservices/user-management-service') {
-                    sh 'mvn clean test'
+                    sh 'mvn clean verify'
                 }
                 echo "✅ Tests User Service passés"
+            }
+            post {
+                always {
+                    // ✏️ ADDED: publishes test results in Jenkins UI
+                    junit(
+                        testResults: 'Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main/microservices/user-management-service/target/surefire-reports/*.xml',
+                        allowEmptyResults: true
+                    )
+                }
             }
         }
 
@@ -45,10 +68,26 @@ pipeline {
             steps {
                 withSonarQubeEnv('sq1') {
                     dir('Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main/microservices/auth-service') {
-                        sh 'mvn sonar:sonar -Dsonar.projectKey=auth-service -Dsonar.projectName="Auth Service" -Dsonar.login=${SONAR_TOKEN}'
+                        // ✏️ ADDED: -Dsonar.coverage.jacoco.xmlReportPaths
+                        // This tells SonarQube where to find the JaCoCo report
+                        // Without this line, coverage stays at 0.0%
+                        sh """
+                            mvn sonar:sonar \
+                                -Dsonar.projectKey=auth-service \
+                                -Dsonar.projectName="Auth Service" \
+                                -Dsonar.login=${SONAR_TOKEN} \
+                                -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+                        """
                     }
                     dir('Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main/microservices/user-management-service') {
-                        sh 'mvn sonar:sonar -Dsonar.projectKey=user-service -Dsonar.projectName="User Management Service" -Dsonar.login=${SONAR_TOKEN}'
+                        // ✏️ ADDED: same fix for user-management-service
+                        sh """
+                            mvn sonar:sonar \
+                                -Dsonar.projectKey=user-service \
+                                -Dsonar.projectName="User Management Service" \
+                                -Dsonar.login=${SONAR_TOKEN} \
+                                -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+                        """
                     }
                 }
                 echo "✅ Analyse SonarQube terminée"
