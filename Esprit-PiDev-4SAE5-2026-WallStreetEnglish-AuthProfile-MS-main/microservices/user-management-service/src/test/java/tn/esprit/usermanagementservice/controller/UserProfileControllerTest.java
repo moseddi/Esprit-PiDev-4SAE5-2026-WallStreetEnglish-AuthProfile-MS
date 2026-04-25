@@ -462,4 +462,6 @@ class UserProfileControllerTest {
                     .andExpect(jsonPath("$.blockedReason").value("Suspicious activity"));
         }
     }
+
+
 }
