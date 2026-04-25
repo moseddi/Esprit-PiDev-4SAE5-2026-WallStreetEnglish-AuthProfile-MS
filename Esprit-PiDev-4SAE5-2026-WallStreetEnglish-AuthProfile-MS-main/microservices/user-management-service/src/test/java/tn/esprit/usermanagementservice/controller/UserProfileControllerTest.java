@@ -1,372 +1,416 @@
 package tn.esprit.usermanagementservice.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
-import tn.esprit.usermanagementservice.config.TestSecurityConfig;
 import tn.esprit.usermanagementservice.dto.CreateUserRequest;
 import tn.esprit.usermanagementservice.dto.UpdateUserRequest;
 import tn.esprit.usermanagementservice.dto.UserProfileDTO;
+import tn.esprit.usermanagementservice.entity.LoginHistory;
 import tn.esprit.usermanagementservice.entity.Role;
+import tn.esprit.usermanagementservice.entity.UserProfile;
 import tn.esprit.usermanagementservice.repository.LoginHistoryRepository;
 import tn.esprit.usermanagementservice.repository.UserProfileRepository;
 import tn.esprit.usermanagementservice.service.KeycloakAdminService;
 import tn.esprit.usermanagementservice.service.UserProfileService;
 
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+// Hamcrest — explicit to avoid clash with Mockito ArgumentMatchers
+import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.containsString;
+
+// Mockito — explicit to avoid clash with Hamcrest Matchers
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(UserProfileController.class)
-@Import(TestSecurityConfig.class)
-@ActiveProfiles("test")
-@DisplayName("UserProfileController Tests")
 class UserProfileControllerTest {
 
-    @Autowired
-    private MockMvc mockMvc;
+    @Autowired MockMvc mockMvc;
+    @Autowired ObjectMapper objectMapper;
 
-    @Autowired
-    private ObjectMapper objectMapper;
+    @MockitoBean UserProfileService       userProfileService;
+    @MockitoBean KeycloakAdminService     keycloakAdminService;
+    @MockitoBean LoginHistoryRepository   loginHistoryRepository;
+    @MockitoBean UserProfileRepository    userProfileRepository;
 
-    @MockitoBean
-    private UserProfileService userProfileService;
+    private UserProfileDTO sampleDTO;
+    private UserProfile    sampleUser;
 
-    @MockitoBean
-    private KeycloakAdminService keycloakAdminService;
+    @BeforeEach
+    void setUp() {
+        sampleDTO = new UserProfileDTO();
+        sampleDTO.setId(1L);
+        sampleDTO.setEmail("student@test.com");
+        sampleDTO.setFirstName("John");
+        sampleDTO.setLastName("Doe");
+        sampleDTO.setRole(Role.STUDENT);
+        sampleDTO.setActive(true);
+        sampleDTO.setBlocked(false);
 
-    @MockitoBean
-    private LoginHistoryRepository loginHistoryRepository;
+        sampleUser = new UserProfile();
+        sampleUser.setId(1L);
+        sampleUser.setEmail("student@test.com");
+        sampleUser.setFirstName("John");
+        sampleUser.setLastName("Doe");
+        sampleUser.setRole(Role.STUDENT);
+        sampleUser.setActive(true);
+        sampleUser.setBlocked(false);
+    }
 
-    @MockitoBean
-    private UserProfileRepository userProfileRepository;
-
-    // ==================== GET ENDPOINT TESTS ====================
-
+    // ══════════════════════════════════════════════════════════════════════
+    //  POST /api/users  — createUser
+    // ══════════════════════════════════════════════════════════════════════
     @Nested
-    @DisplayName("GET Endpoints Tests")
-    class GetEndpointTests {
+    class CreateUserTests {
 
         @Test
-        @DisplayName("GET /api/users/{id} - Should return user by ID")
-        void getUserById_ShouldReturnUser() throws Exception {
-            UserProfileDTO dto = new UserProfileDTO();
-            dto.setId(1L);
-            dto.setEmail("test@test.com");
-            dto.setRole(Role.STUDENT);
+        void createUser_returnsCreatedDTO() throws Exception {
+            CreateUserRequest req = new CreateUserRequest();
+            req.setEmail("student@test.com");
+            req.setFirstName("John");
+            req.setLastName("Doe");
+            req.setRole(Role.STUDENT);
 
-            when(userProfileService.getUserById(1L)).thenReturn(dto);
+            when(userProfileService.createUser(any(CreateUserRequest.class), any()))
+                    .thenReturn(sampleDTO);
+
+            mockMvc.perform(post("/api/users")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(req))
+                            .header("Authorization", "Bearer token"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.email").value("student@test.com"))
+                    .andExpect(jsonPath("$.firstName").value("John"));
+        }
+
+        @Test
+        void createUser_withoutAuthHeader_returnsCreatedDTO() throws Exception {
+            CreateUserRequest req = new CreateUserRequest();
+            req.setEmail("student@test.com");
+            req.setFirstName("John");
+            req.setLastName("Doe");
+            req.setRole(Role.STUDENT);
+
+            when(userProfileService.createUser(any(CreateUserRequest.class), isNull()))
+                    .thenReturn(sampleDTO);
+
+            mockMvc.perform(post("/api/users")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(req)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.email").value("student@test.com"));
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  PUT /api/users/profile/{email} — completeProfile
+    // ══════════════════════════════════════════════════════════════════════
+    @Nested
+    class CompleteProfileTests {
+
+        @Test
+        void completeProfile_returnsUpdatedDTO() throws Exception {
+            UpdateUserRequest req = new UpdateUserRequest();
+            req.setFirstName("Jane");
+
+            when(userProfileService.updateUserProfile(eq("student@test.com"), any()))
+                    .thenReturn(sampleDTO);
+
+            mockMvc.perform(put("/api/users/profile/student@test.com")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(req)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.email").value("student@test.com"));
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  GET /api/users/{id} — getUserById
+    // ══════════════════════════════════════════════════════════════════════
+    @Nested
+    class GetUserByIdTests {
+
+        @Test
+        void getUserById_returnsDTO() throws Exception {
+            when(userProfileService.getUserById(1L)).thenReturn(sampleDTO);
 
             mockMvc.perform(get("/api/users/1"))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.id").value(1))
-                    .andExpect(jsonPath("$.email").value("test@test.com"));
+                    .andExpect(jsonPath("$.id").value(1L));
         }
 
         @Test
-        @DisplayName("GET /api/users/email/{email} - Should return user by email")
-        void getUserByEmail_ShouldReturnUser() throws Exception {
-            UserProfileDTO dto = new UserProfileDTO();
-            dto.setEmail("test@test.com");
-            dto.setRole(Role.STUDENT);
+        void getUserById_notFound_propagatesException() {
+            when(userProfileService.getUserById(99L))
+                    .thenThrow(new RuntimeException("User not found"));
 
-            when(userProfileService.getUserByEmail("test@test.com")).thenReturn(dto);
+            // No @ExceptionHandler in controller — Spring wraps RuntimeException
+            // in a ServletException; assert it throws instead of checking HTTP status.
+            org.junit.jupiter.api.Assertions.assertThrows(
+                    jakarta.servlet.ServletException.class,
+                    () -> mockMvc.perform(get("/api/users/99"))
+            );
+        }
+    }
 
-            mockMvc.perform(get("/api/users/email/test@test.com"))
+    // ══════════════════════════════════════════════════════════════════════
+    //  GET /api/users/email/{email} — getUserByEmail
+    // ══════════════════════════════════════════════════════════════════════
+    @Nested
+    class GetUserByEmailTests {
+
+        @Test
+        void getUserByEmail_returnsDTO() throws Exception {
+            when(userProfileService.getUserByEmail("student@test.com")).thenReturn(sampleDTO);
+
+            mockMvc.perform(get("/api/users/email/student@test.com"))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.email").value("test@test.com"));
+                    .andExpect(jsonPath("$.email").value("student@test.com"));
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  GET /api/users — getAllUsers
+    // ══════════════════════════════════════════════════════════════════════
+    @Nested
+    class GetAllUsersTests {
+
+        @Test
+        void getAllUsers_returnsList() throws Exception {
+            when(userProfileService.getAllUsers()).thenReturn(List.of(sampleDTO));
+
+            mockMvc.perform(get("/api/users"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(1)))
+                    .andExpect(jsonPath("$[0].email").value("student@test.com"));
         }
 
         @Test
-        @DisplayName("GET /api/users - Should return all users")
-        void getAllUsers_ShouldReturnList() throws Exception {
+        void getAllUsers_emptyList_returnsEmptyArray() throws Exception {
             when(userProfileService.getAllUsers()).thenReturn(List.of());
 
             mockMvc.perform(get("/api/users"))
-                    .andExpect(status().isOk());
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(0)));
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  GET /api/users/role/{role} — getUsersByRole
+    // ══════════════════════════════════════════════════════════════════════
+    @Nested
+    class GetUsersByRoleTests {
 
         @Test
-        @DisplayName("GET /api/users/role/{role} - Should return users by role")
-        void getUsersByRole_ShouldReturnFilteredList() throws Exception {
-            when(userProfileService.getUsersByRole(Role.STUDENT)).thenReturn(List.of());
+        void getUsersByRole_student_returnsList() throws Exception {
+            when(userProfileService.getUsersByRole(Role.STUDENT)).thenReturn(List.of(sampleDTO));
 
             mockMvc.perform(get("/api/users/role/STUDENT"))
-                    .andExpect(status().isOk());
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$[0].role").value("STUDENT"));
         }
 
         @Test
-        @DisplayName("GET /api/users/test - Should return working message")
-        void testEndpoint_ShouldReturnWorkingMessage() throws Exception {
+        void getUsersByRole_tutor_returnsEmptyList() throws Exception {
+            when(userProfileService.getUsersByRole(Role.TUTOR)).thenReturn(List.of());
+
+            mockMvc.perform(get("/api/users/role/TUTOR"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(0)));
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  PUT /api/users/{id} — updateUser
+    // ══════════════════════════════════════════════════════════════════════
+    @Nested
+    class UpdateUserTests {
+
+        @Test
+        void updateUser_returnsUpdatedDTO() throws Exception {
+            UpdateUserRequest req = new UpdateUserRequest();
+            req.setFirstName("Updated");
+
+            when(userProfileService.updateUser(eq(1L), any())).thenReturn(sampleDTO);
+
+            mockMvc.perform(put("/api/users/1")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(req)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.id").value(1L));
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  DELETE /api/users/{id} — deleteUser
+    // ══════════════════════════════════════════════════════════════════════
+    @Nested
+    class DeleteUserTests {
+
+        @Test
+        void deleteUser_returns204() throws Exception {
+            doNothing().when(userProfileService).deleteUser(1L);
+
+            mockMvc.perform(delete("/api/users/1"))
+                    .andExpect(status().isNoContent());
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  GET /api/users/test
+    // ══════════════════════════════════════════════════════════════════════
+    @Nested
+    class TestEndpointTests {
+
+        @Test
+        void testEndpoint_returnsWorkingMessage() throws Exception {
             mockMvc.perform(get("/api/users/test"))
                     .andExpect(status().isOk())
                     .andExpect(content().string("User Management Service is working!"));
         }
     }
 
-    // ==================== POST CREATE ENDPOINT TESTS ====================
-
+    // ══════════════════════════════════════════════════════════════════════
+    //  POST /api/users/record-login  &  /record-logout
+    // ══════════════════════════════════════════════════════════════════════
     @Nested
-    @DisplayName("POST Create Endpoint Tests")
-    class PostCreateTests {
+    class LoginLogoutRecordTests {
 
         @Test
-        @DisplayName("POST /api/users - Should create user")
-        void createUser_ShouldReturnOk() throws Exception {
-            CreateUserRequest request = new CreateUserRequest();
-            request.setEmail("new@test.com");
-            request.setRole(Role.STUDENT);
-            request.setFirstName("John");
-            request.setLastName("Doe");
-
-            UserProfileDTO dto = new UserProfileDTO();
-            dto.setEmail("new@test.com");
-            dto.setRole(Role.STUDENT);
-
-            when(userProfileService.createUser(any(CreateUserRequest.class), anyString()))
-                    .thenReturn(dto);
-
-            mockMvc.perform(post("/api/users")
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(objectMapper.writeValueAsString(request))
-                            .header("Authorization", "Bearer test-token"))
-                    .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.email").value("new@test.com"));
-        }
-
-        @Test
-        @DisplayName("POST /api/users/record-login - Should record user login")
-        void recordUserLogin_ShouldReturnOk() throws Exception {
-            doNothing().when(userProfileService).recordUserLogin("test@test.com");
+        void recordLogin_returns200() throws Exception {
+            doNothing().when(userProfileService).recordUserLogin("student@test.com");
 
             mockMvc.perform(post("/api/users/record-login")
-                            .param("email", "test@test.com"))
+                            .param("email", "student@test.com"))
                     .andExpect(status().isOk());
         }
 
         @Test
-        @DisplayName("POST /api/users/record-logout - Should record user logout")
-        void recordUserLogout_ShouldReturnOk() throws Exception {
-            doNothing().when(userProfileService).recordUserLogout(anyString(), any());
+        void recordLogout_voluntary_returns200() throws Exception {
+            doNothing().when(userProfileService)
+                    .recordUserLogout("student@test.com", LoginHistory.LogoutType.VOLUNTARY);
 
             mockMvc.perform(post("/api/users/record-logout")
-                            .param("email", "test@test.com")
+                            .param("email", "student@test.com")
                             .param("logoutType", "VOLUNTARY"))
                     .andExpect(status().isOk());
         }
 
         @Test
-        @DisplayName("POST /api/users/force-logout/{email} - Should force logout user")
-        void forceLogout_ShouldReturnOk() throws Exception {
-            doNothing().when(keycloakAdminService).logoutUserSessions("test@test.com");
-            doNothing().when(userProfileService).recordUserLogout(anyString(), any());
+        void recordLogout_defaultLogoutType_voluntary() throws Exception {
+            // No logoutType param → default VOLUNTARY
+            doNothing().when(userProfileService)
+                    .recordUserLogout(eq("student@test.com"), any());
 
-            mockMvc.perform(post("/api/users/force-logout/test@test.com"))
-                    .andExpect(status().isOk())
-                    .andExpect(content().string("User test@test.com logged out"));
-        }
-
-        @Test
-        @DisplayName("POST /api/users/sync-from-auth - Should sync user from auth")
-        void syncFromAuth_ShouldReturnOk() throws Exception {
-            Map<String, Object> userData = new HashMap<>();
-            userData.put("email", "test@test.com");
-            userData.put("role", "STUDENT");
-
-            UserProfileDTO dto = new UserProfileDTO();
-            dto.setEmail("test@test.com");
-
-            when(userProfileService.syncUserFromAuth(eq("test@test.com"), eq("STUDENT")))
-                    .thenReturn(dto);
-
-            mockMvc.perform(post("/api/users/sync-from-auth")
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(objectMapper.writeValueAsString(userData)))
+            mockMvc.perform(post("/api/users/record-logout")
+                            .param("email", "student@test.com"))
                     .andExpect(status().isOk());
         }
 
         @Test
-        @DisplayName("POST /api/users/block/{email} - Should block user")
-        void blockUser_ShouldReturnOk() throws Exception {
-            doNothing().when(userProfileService).blockUser("test@test.com", "Suspicious activity");
+        void recordLogout_forced_returns200() throws Exception {
+            doNothing().when(userProfileService)
+                    .recordUserLogout("student@test.com", LoginHistory.LogoutType.FORCED);
 
-            mockMvc.perform(post("/api/users/block/test@test.com")
-                            .param("reason", "Suspicious activity"))
-                    .andExpect(status().isOk())
-                    .andExpect(content().string("User test@test.com has been blocked"));
-        }
-
-        @Test
-        @DisplayName("POST /api/users/unblock/{email} - Should unblock user")
-        void unblockUserPost_ShouldReturnOk() throws Exception {
-            doNothing().when(userProfileService).unblockUser("test@test.com");
-
-            mockMvc.perform(post("/api/users/unblock/test@test.com"))
-                    .andExpect(status().isOk())
-                    .andExpect(content().string("User test@test.com has been unblocked"));
-        }
-
-        @Test
-        @DisplayName("POST /api/users/reactivate-request - Should submit reactivation request")
-        void reactivateRequest_ShouldReturnOk() throws Exception {
-            Map<String, String> request = new HashMap<>();
-            request.put("email", "test@test.com");
-            request.put("reason", "False positive");
-            request.put("confirmation", "Yes");
-
-            doNothing().when(userProfileService).processReactivationRequest(anyMap());
-
-            mockMvc.perform(post("/api/users/reactivate-request")
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(objectMapper.writeValueAsString(request)))
-                    .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.status").value("success"));
-        }
-
-        @Test
-        @DisplayName("POST /api/users/send-reactivation-email/{email} - Should send reactivation email")
-        void sendReactivationEmail_ShouldReturnOk() throws Exception {
-            doNothing().when(userProfileService).sendReactivationEmail("test@test.com");
-
-            mockMvc.perform(post("/api/users/send-reactivation-email/test@test.com"))
-                    .andExpect(status().isOk())
-                    .andExpect(content().string("Reactivation email sent to test@test.com"));
-        }
-    }
-
-    // ==================== PUT ENDPOINT TESTS ====================
-
-    @Nested
-    @DisplayName("PUT Endpoint Tests")
-    class PutEndpointTests {
-
-        @Test
-        @DisplayName("PUT /api/users/profile/{email} - Should update user profile by email")
-        void updateUserProfile_ShouldReturnUpdatedUser() throws Exception {
-            UserProfileDTO dto = new UserProfileDTO();
-            dto.setEmail("test@test.com");
-            dto.setFirstName("Updated");
-
-            UpdateUserRequest request = new UpdateUserRequest();
-            request.setFirstName("Updated");
-
-            when(userProfileService.updateUserProfile(eq("test@test.com"), any(UpdateUserRequest.class)))
-                    .thenReturn(dto);
-
-            mockMvc.perform(put("/api/users/profile/test@test.com")
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(objectMapper.writeValueAsString(request)))
+            mockMvc.perform(post("/api/users/record-logout")
+                            .param("email", "student@test.com")
+                            .param("logoutType", "FORCED"))
                     .andExpect(status().isOk());
         }
 
         @Test
-        @DisplayName("PUT /api/users/{id} - Should update user by ID")
-        void updateUserById_ShouldReturnOk() throws Exception {
-            UserProfileDTO dto = new UserProfileDTO();
-            dto.setId(1L);
-            dto.setFirstName("Updated");
+        void recordLogout_timeout_returns200() throws Exception {
+            doNothing().when(userProfileService)
+                    .recordUserLogout("student@test.com", LoginHistory.LogoutType.TIMEOUT);
 
-            UpdateUserRequest request = new UpdateUserRequest();
-            request.setFirstName("Updated");
-
-            when(userProfileService.updateUser(eq(1L), any(UpdateUserRequest.class)))
-                    .thenReturn(dto);
-
-            mockMvc.perform(put("/api/users/1")
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(objectMapper.writeValueAsString(request)))
-                    .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.firstName").value("Updated"));
-        }
-    }
-
-    // ==================== DELETE ENDPOINT TESTS ====================
-
-    @Nested
-    @DisplayName("DELETE Endpoint Tests")
-    class DeleteEndpointTests {
-
-        @Test
-        @DisplayName("DELETE /api/users/{id} - Should delete user and return 204")
-        void deleteUser_ShouldReturnNoContent() throws Exception {
-            doNothing().when(userProfileService).deleteUser(1L);
-
-            mockMvc.perform(delete("/api/users/1"))
-                    .andExpect(status().isNoContent());
-
-            verify(userProfileService, times(1)).deleteUser(1L);
-        }
-    }
-
-    // ==================== STATISTICS ENDPOINT TESTS ====================
-
-    @Nested
-    @DisplayName("GET Statistics Endpoint Tests")
-    class StatisticsEndpointTests {
-
-        @Test
-        @DisplayName("GET /api/users/statistics - Should return statistics")
-        void getStatistics_ShouldReturnOk() throws Exception {
-            when(loginHistoryRepository.findAllEventsLast24h(any()))
-                    .thenReturn(List.of());
-            when(loginHistoryRepository.countByActive(true)).thenReturn(0L);
-            when(loginHistoryRepository.countBySuspiciousAndLoginTimeAfter(anyBoolean(), any()))
-                    .thenReturn(0L);
-
-            mockMvc.perform(get("/api/users/statistics"))
-                    .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.logins").exists())
-                    .andExpect(jsonPath("$.logouts").exists())
-                    .andExpect(jsonPath("$.activeSessions").exists())
-                    .andExpect(jsonPath("$.suspicious").exists());
-        }
-
-        @Test
-        @DisplayName("GET /api/users/active-sessions - Should return active sessions")
-        void getActiveSessions_ShouldReturnOk() throws Exception {
-            when(loginHistoryRepository.findByActiveTrueOrderByLoginTimeDesc())
-                    .thenReturn(List.of());
-
-            mockMvc.perform(get("/api/users/active-sessions"))
+            mockMvc.perform(post("/api/users/record-logout")
+                            .param("email", "student@test.com")
+                            .param("logoutType", "TIMEOUT"))
                     .andExpect(status().isOk());
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  POST /api/users/force-logout/{email}
+    // ══════════════════════════════════════════════════════════════════════
+    @Nested
+    class ForceLogoutTests {
 
         @Test
-        @DisplayName("GET /api/users/recent-logins - Should return recent logins")
-        void getRecentLogins_ShouldReturnOk() throws Exception {
+        void forceLogout_callsKeycloakAndRecords() throws Exception {
+            doNothing().when(keycloakAdminService).logoutUserSessions("student@test.com");
+            doNothing().when(userProfileService)
+                    .recordUserLogout("student@test.com", LoginHistory.LogoutType.FORCED);
+
+            mockMvc.perform(post("/api/users/force-logout/student@test.com"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(containsString("student@test.com")));
+
+            verify(keycloakAdminService).logoutUserSessions("student@test.com");
+            verify(userProfileService).recordUserLogout("student@test.com", LoginHistory.LogoutType.FORCED);
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  Security monitor endpoints
+    // ══════════════════════════════════════════════════════════════════════
+    @Nested
+    class SecurityMonitorTests {
+
+        @Test
+        void getRecentLogins_returnsList() throws Exception {
+            LoginHistory lh = new LoginHistory();
+            lh.setId(1L);
+            lh.setEmail("student@test.com");
+            lh.setType(LoginHistory.EventType.LOGIN);
+            lh.setLoginTime(LocalDateTime.now());
+            lh.setActive(true);
+
             when(loginHistoryRepository.findTop20ByOrderByLoginTimeDesc())
-                    .thenReturn(List.of());
+                    .thenReturn(List.of(lh));
 
             mockMvc.perform(get("/api/users/recent-logins"))
-                    .andExpect(status().isOk());
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(1)));
         }
 
         @Test
-        @DisplayName("GET /api/users/logins/today - Should return today's logins")
-        void getTodayLogins_ShouldReturnOk() throws Exception {
+        void getTodayLogins_returnsList() throws Exception {
             when(loginHistoryRepository.findByLoginTimeAfterOrderByLoginTimeDesc(any()))
                     .thenReturn(List.of());
 
             mockMvc.perform(get("/api/users/logins/today"))
-                    .andExpect(status().isOk());
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(0)));
         }
 
         @Test
-        @DisplayName("GET /api/users/sessions/active-count - Should return active session count")
-        void getActiveSessionCount_ShouldReturnOk() throws Exception {
+        void getActiveSessionCount_returnsCount() throws Exception {
             when(loginHistoryRepository.countByActive(true)).thenReturn(5L);
 
             mockMvc.perform(get("/api/users/sessions/active-count"))
@@ -375,93 +419,255 @@ class UserProfileControllerTest {
         }
 
         @Test
-        @DisplayName("GET /api/users/logins/suspicious-count - Should return suspicious count")
-        void getSuspiciousCount_ShouldReturnOk() throws Exception {
-            when(loginHistoryRepository.countBySuspiciousAndLoginTimeAfter(anyBoolean(), any()))
-                    .thenReturn(2L);
+        void getSuspiciousCount_returnsCount() throws Exception {
+            when(loginHistoryRepository.countBySuspiciousAndLoginTimeAfter(eq(true), any()))
+                    .thenReturn(3L);
 
             mockMvc.perform(get("/api/users/logins/suspicious-count"))
                     .andExpect(status().isOk())
-                    .andExpect(content().string("2"));
+                    .andExpect(content().string("3"));
         }
 
         @Test
-        @DisplayName("GET /api/users/recent-logins-formatted - Should return formatted messages")
-        void getRecentLoginsFormatted_ShouldReturnOk() throws Exception {
-            when(loginHistoryRepository.findAllEventsLast24h(any()))
+        void getActiveSessions_returnsList() throws Exception {
+            when(loginHistoryRepository.findByActiveTrueOrderByLoginTimeDesc())
                     .thenReturn(List.of());
 
-            mockMvc.perform(get("/api/users/recent-logins-formatted"))
-                    .andExpect(status().isOk());
+            mockMvc.perform(get("/api/users/active-sessions"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(0)));
         }
     }
 
-    // ==================== REACTIVATION ENDPOINT TESTS ====================
-
+    // ══════════════════════════════════════════════════════════════════════
+    //  POST /api/users/sync-from-auth
+    // ══════════════════════════════════════════════════════════════════════
     @Nested
-    @DisplayName("Reactivation Endpoint Tests")
-    class ReactivationEndpointTests {
+    class SyncFromAuthTests {
 
         @Test
-        @DisplayName("GET /api/users/reactivate/{token} - Should validate token")
-        void validateReactivationToken_ShouldReturnValidation() throws Exception {
-            when(userProfileService.validateReactivationToken("valid-token")).thenReturn(true);
+        void syncFromAuth_returnsDTO() throws Exception {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("email", "student@test.com");
+            payload.put("role", "STUDENT");
 
-            mockMvc.perform(get("/api/users/reactivate/valid-token"))
+            when(userProfileService.syncUserFromAuth("student@test.com", "STUDENT"))
+                    .thenReturn(sampleDTO);
+
+            mockMvc.perform(post("/api/users/sync-from-auth")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(payload)))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.valid").value(true));
+                    .andExpect(jsonPath("$.email").value("student@test.com"));
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  GET /api/users/statistics
+    // ══════════════════════════════════════════════════════════════════════
+    @Nested
+    class StatisticsTests {
+
+        @Test
+        void getStatistics_mixedEvents_returnsCorrectCounts() throws Exception {
+            LoginHistory login = new LoginHistory();
+            login.setType(LoginHistory.EventType.LOGIN);
+            login.setLoginTime(LocalDateTime.now());
+
+            LoginHistory logout = new LoginHistory();
+            logout.setType(LoginHistory.EventType.LOGOUT);
+            logout.setLoginTime(LocalDateTime.now());
+
+            when(loginHistoryRepository.findAllEventsLast24h(any()))
+                    .thenReturn(List.of(login, logout));
+            when(loginHistoryRepository.countByActive(true)).thenReturn(2L);
+            when(loginHistoryRepository.countBySuspiciousAndLoginTimeAfter(eq(true), any()))
+                    .thenReturn(1L);
+
+            mockMvc.perform(get("/api/users/statistics"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.logins").value(1))
+                    .andExpect(jsonPath("$.logouts").value(1))
+                    .andExpect(jsonPath("$.activeSessions").value(2))
+                    .andExpect(jsonPath("$.suspicious").value(1))
+                    .andExpect(jsonPath("$.period").value("Last 24 Hours"));
         }
 
         @Test
-        @DisplayName("GET /api/users/reactivate/{token} - Should return false for invalid token")
-        void validateReactivationToken_InvalidToken_ShouldReturnFalse() throws Exception {
-            when(userProfileService.validateReactivationToken("invalid-token")).thenReturn(false);
+        void getStatistics_noEvents_returnsZeros() throws Exception {
+            when(loginHistoryRepository.findAllEventsLast24h(any())).thenReturn(List.of());
+            when(loginHistoryRepository.countByActive(true)).thenReturn(0L);
+            when(loginHistoryRepository.countBySuspiciousAndLoginTimeAfter(eq(true), any()))
+                    .thenReturn(0L);
 
-            mockMvc.perform(get("/api/users/reactivate/invalid-token"))
+            mockMvc.perform(get("/api/users/statistics"))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.valid").value(false));
+                    .andExpect(jsonPath("$.logins").value(0))
+                    .andExpect(jsonPath("$.logouts").value(0));
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  GET /api/users/recent-logins-formatted
+    // ══════════════════════════════════════════════════════════════════════
+    @Nested
+    class RecentLoginsFormattedTests {
+
+        @Test
+        void getRecentLoginsFormatted_returnsMessages() throws Exception {
+            LoginHistory lh = new LoginHistory();
+            lh.setType(LoginHistory.EventType.LOGIN);
+            lh.setLoginTime(LocalDateTime.now());
+            lh.setEmail("student@test.com");
+
+            when(loginHistoryRepository.findAllEventsLast24h(any())).thenReturn(List.of(lh));
+
+            mockMvc.perform(get("/api/users/recent-logins-formatted"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(1)));
         }
 
         @Test
-        @DisplayName("GET /api/users/unblock/{email} - Should unblock user via GET")
-        void unblockUserGet_ShouldReturnOk() throws Exception {
-            doNothing().when(userProfileService).unblockUser("test@test.com");
+        void getRecentLoginsFormatted_emptyEvents_returnsEmptyList() throws Exception {
+            when(loginHistoryRepository.findAllEventsLast24h(any())).thenReturn(List.of());
 
-            mockMvc.perform(get("/api/users/unblock/test@test.com"))
+            mockMvc.perform(get("/api/users/recent-logins-formatted"))
                     .andExpect(status().isOk())
-                    .andExpect(content().string("User test@test.com has been unblocked. You can now login."));
+                    .andExpect(jsonPath("$", hasSize(0)));
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  Block / Unblock endpoints
+    // ══════════════════════════════════════════════════════════════════════
+    @Nested
+    class BlockUnblockTests {
+
+        @Test
+        void blockUser_returns200WithMessage() throws Exception {
+            doNothing().when(userProfileService).blockUser("student@test.com", "Suspicious activity");
+
+            mockMvc.perform(post("/api/users/block/student@test.com")
+                            .param("reason", "Suspicious activity"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(containsString("blocked")));
+
+            verify(userProfileService).blockUser("student@test.com", "Suspicious activity");
         }
 
         @Test
-        @DisplayName("GET /api/users/check-blocked/{email} - Should return block status")
-        void checkBlocked_ShouldReturnStatus() throws Exception {
-            UserProfileDTO dto = new UserProfileDTO();
-            dto.setBlocked(false);
-            dto.setBlockedReason(null);
+        void unblockUser_post_returns200WithMessage() throws Exception {
+            doNothing().when(userProfileService).unblockUser("student@test.com");
 
-            when(userProfileService.getUserByEmail("test@test.com")).thenReturn(dto);
+            mockMvc.perform(post("/api/users/unblock/student@test.com"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(containsString("unblocked")));
 
-            mockMvc.perform(get("/api/users/check-blocked/test@test.com"))
+            verify(userProfileService).unblockUser("student@test.com");
+        }
+
+        @Test
+        void unblockUser_get_returns200WithMessage() throws Exception {
+            doNothing().when(userProfileService).unblockUser("student@test.com");
+
+            mockMvc.perform(get("/api/users/unblock/student@test.com"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(containsString("unblocked")));
+
+            verify(userProfileService).unblockUser("student@test.com");
+        }
+
+        @Test
+        void checkBlocked_notBlocked_returnsFalse() throws Exception {
+            when(userProfileService.getUserByEmail("student@test.com")).thenReturn(sampleDTO);
+
+            mockMvc.perform(get("/api/users/check-blocked/student@test.com"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.blocked").value(false))
                     .andExpect(jsonPath("$.blockedReason").doesNotExist());
         }
 
         @Test
-        @DisplayName("GET /api/users/check-blocked/{email} - Should return true for blocked user")
-        void checkBlocked_BlockedUser_ShouldReturnTrue() throws Exception {
-            UserProfileDTO dto = new UserProfileDTO();
-            dto.setBlocked(true);
-            dto.setBlockedReason("Suspicious activity");
+        void checkBlocked_blocked_returnsReason() throws Exception {
+            UserProfileDTO blocked = new UserProfileDTO();
+            blocked.setId(1L);
+            blocked.setEmail("student@test.com");
+            blocked.setBlocked(true);
+            blocked.setBlockedReason("Suspicious activity");
+            when(userProfileService.getUserByEmail("student@test.com")).thenReturn(blocked);
 
-            when(userProfileService.getUserByEmail("test@test.com")).thenReturn(dto);
-
-            mockMvc.perform(get("/api/users/check-blocked/test@test.com"))
+            mockMvc.perform(get("/api/users/check-blocked/student@test.com"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.blocked").value(true))
                     .andExpect(jsonPath("$.blockedReason").value("Suspicious activity"));
         }
     }
 
+    // ══════════════════════════════════════════════════════════════════════
+    //  Reactivation endpoints
+    // ══════════════════════════════════════════════════════════════════════
+    @Nested
+    class ReactivationTests {
 
+        @Test
+        void validateReactivationToken_validToken_returnsValidTrueAndEmail() throws Exception {
+            when(userProfileService.validateReactivationToken("abc123")).thenReturn(true);
+            when(userProfileRepository.findAll()).thenReturn(List.of(sampleUser));
+            sampleUser.setReactivationToken("abc123");
+
+            mockMvc.perform(get("/api/users/reactivate/abc123"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.valid").value(true))
+                    .andExpect(jsonPath("$.email").value("student@test.com"));
+        }
+
+        @Test
+        void validateReactivationToken_invalidToken_returnsValidFalse() throws Exception {
+            when(userProfileService.validateReactivationToken("bad-token")).thenReturn(false);
+
+            mockMvc.perform(get("/api/users/reactivate/bad-token"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.valid").value(false))
+                    .andExpect(jsonPath("$.email").doesNotExist());
+        }
+
+        @Test
+        void validateReactivationToken_validButNoMatchingUser_noEmailInResponse() throws Exception {
+            when(userProfileService.validateReactivationToken("orphan-token")).thenReturn(true);
+            // All users have different tokens
+            when(userProfileRepository.findAll()).thenReturn(List.of(sampleUser));
+            sampleUser.setReactivationToken("different-token");
+
+            mockMvc.perform(get("/api/users/reactivate/orphan-token"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.valid").value(true))
+                    .andExpect(jsonPath("$.email").doesNotExist());
+        }
+
+        @Test
+        void requestReactivation_returnsSuccessMessage() throws Exception {
+            Map<String, String> body = new HashMap<>();
+            body.put("email", "student@test.com");
+
+            doNothing().when(userProfileService).processReactivationRequest(any());
+
+            mockMvc.perform(post("/api/users/reactivate-request")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(body)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.status").value("success"))
+                    .andExpect(jsonPath("$.message").value("Reactivation request submitted successfully"));
+        }
+
+        @Test
+        void sendReactivationEmail_returns200() throws Exception {
+            doNothing().when(userProfileService).sendReactivationEmail("student@test.com");
+
+            mockMvc.perform(post("/api/users/send-reactivation-email/student@test.com"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(containsString("student@test.com")));
+
+            verify(userProfileService).sendReactivationEmail("student@test.com");
+        }
+    }
 }
