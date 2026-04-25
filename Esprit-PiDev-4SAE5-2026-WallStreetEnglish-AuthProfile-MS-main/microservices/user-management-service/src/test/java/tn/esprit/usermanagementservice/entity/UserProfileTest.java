@@ -119,4 +119,20 @@ class UserProfileTest {
         assertThat(userProfile.getReactivationToken()).isEqualTo(token);
         assertThat(userProfile.getReactivationTokenExpiry()).isNotNull();
     }
+
+    @Test
+    @DisplayName("Should set address and contact fields")
+    void setAddressFields_ShouldUpdate() {
+        userProfile.setAddress("123 Main St");
+        userProfile.setCity("Tunis");
+        userProfile.setCountry("Tunisia");
+        userProfile.setPhoneNumber("12345678");
+        userProfile.setDateOfBirth(LocalDateTime.of(1990, 1, 1, 0, 0));
+
+        assertThat(userProfile.getAddress()).isEqualTo("123 Main St");
+        assertThat(userProfile.getCity()).isEqualTo("Tunis");
+        assertThat(userProfile.getCountry()).isEqualTo("Tunisia");
+        assertThat(userProfile.getPhoneNumber()).isEqualTo("12345678");
+        assertThat(userProfile.getDateOfBirth()).isNotNull();
+    }
 }

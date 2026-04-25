@@ -56,7 +56,16 @@ class DtoTests {
         void shouldCreateResponseWithNoArgsConstructor() {
             AuthResponse response = new AuthResponse();
             response.setToken("token");
+            response.setEmail("test@test.com");
+            response.setRole(Role.ADMIN);
+            response.setUserId(2L);
+            response.setMessage("OK");
+
             assertThat(response.getToken()).isEqualTo("token");
+            assertThat(response.getEmail()).isEqualTo("test@test.com");
+            assertThat(response.getRole()).isEqualTo(Role.ADMIN);
+            assertThat(response.getUserId()).isEqualTo(2L);
+            assertThat(response.getMessage()).isEqualTo("OK");
         }
     }
 
@@ -72,12 +81,16 @@ class DtoTests {
             request.setLastName("Doe");
             request.setRole(Role.STUDENT);
             request.setCity("Tunis");
+            request.setCountry("Tunisia");
+            request.setPhoneNumber("12345678");
+            request.setAddress("123 Main St");
 
             assertThat(request.getEmail()).isEqualTo("test@test.com");
             assertThat(request.getFirstName()).isEqualTo("John");
             assertThat(request.getLastName()).isEqualTo("Doe");
             assertThat(request.getRole()).isEqualTo(Role.STUDENT);
             assertThat(request.getCity()).isEqualTo("Tunis");
+            assertThat(request.getCountry()).isEqualTo("Tunisia");
         }
     }
 
@@ -93,6 +106,8 @@ class DtoTests {
             request.setRole(Role.TUTOR);
             request.setActive(true);
             request.setCity("Sfax");
+            request.setCountry("Tunisia");
+            request.setPhoneNumber("987654321");
 
             assertThat(request.getFirstName()).isEqualTo("Jane");
             assertThat(request.getLastName()).isEqualTo("Smith");
@@ -117,6 +132,9 @@ class DtoTests {
             dto.setActive(true);
             dto.setBlocked(false);
             dto.setLoginCount(10);
+            dto.setCity("Tunis");
+            dto.setCountry("Tunisia");
+            dto.setPhoneNumber("12345678");
 
             assertThat(dto.getId()).isEqualTo(1L);
             assertThat(dto.getEmail()).isEqualTo("test@test.com");
@@ -140,10 +158,25 @@ class DtoTests {
             event.setType(LoginEventMessage.EventType.LOGIN);
             event.setIpAddress("127.0.0.1");
             event.setBrowser("Chrome");
+            event.setOs("Windows");
+            event.setDeviceType("Desktop");
+            event.setSessionId("session-123");
 
             assertThat(event.getEmail()).isEqualTo("test@test.com");
             assertThat(event.getType()).isEqualTo(LoginEventMessage.EventType.LOGIN);
             assertThat(event.getIpAddress()).isEqualTo("127.0.0.1");
+            assertThat(event.getBrowser()).isEqualTo("Chrome");
+        }
+
+        @Test
+        void shouldHandleLogoutEvent() {
+            LoginEventMessage event = new LoginEventMessage();
+            event.setEmail("test@test.com");
+            event.setType(LoginEventMessage.EventType.LOGOUT);
+            event.setLogoutType(LoginEventMessage.LogoutType.VOLUNTARY);
+
+            assertThat(event.getType()).isEqualTo(LoginEventMessage.EventType.LOGOUT);
+            assertThat(event.getLogoutType()).isEqualTo(LoginEventMessage.LogoutType.VOLUNTARY);
         }
     }
 
@@ -171,6 +204,10 @@ class DtoTests {
             UserActivityDTO dto = new UserActivityDTO();
             dto.setId(1L);
             dto.setEmail("test@test.com");
+            dto.setFirstName("John");
+            dto.setLastName("Doe");
+            dto.setRole("STUDENT");
+            dto.setCity("Tunis");
             dto.setLoginCount(15);
             dto.setDaysSinceLastLogin(2);
             dto.setAverageLoginsPerMonth(5.5);
@@ -178,6 +215,26 @@ class DtoTests {
             assertThat(dto.getEmail()).isEqualTo("test@test.com");
             assertThat(dto.getLoginCount()).isEqualTo(15);
             assertThat(dto.getAverageLoginsPerMonth()).isEqualTo(5.5);
+            assertThat(dto.getDaysSinceLastLogin()).isEqualTo(2);
+        }
+    }
+
+    @Nested
+    @DisplayName("UserActivityStatsDTO Tests")
+    class UserActivityStatsDTOTests {
+
+        @Test
+        void shouldCreateUserActivityStatsDTO() {
+            UserActivityStatsDTO stats = new UserActivityStatsDTO();
+            stats.setTotalUsers(100);
+            stats.setActiveUsersLastDay(50);
+            stats.setRetentionRate(75.5);
+            stats.setAverageLoginsPerUser(3.2);
+
+            assertThat(stats.getTotalUsers()).isEqualTo(100);
+            assertThat(stats.getActiveUsersLastDay()).isEqualTo(50);
+            assertThat(stats.getRetentionRate()).isEqualTo(75.5);
+            assertThat(stats.getAverageLoginsPerUser()).isEqualTo(3.2);
         }
     }
 }

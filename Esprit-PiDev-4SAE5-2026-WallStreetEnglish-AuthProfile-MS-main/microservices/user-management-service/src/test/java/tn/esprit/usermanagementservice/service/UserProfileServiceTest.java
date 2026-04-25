@@ -1,5 +1,5 @@
 package tn.esprit.usermanagementservice.service;
-
+import tn.esprit.usermanagementservice.dto.AuthRegisterRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -15,6 +15,7 @@ import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import tn.esprit.usermanagementservice.client.AuthServiceClient;
+import tn.esprit.usermanagementservice.dto.CreateUserRequest;
 import tn.esprit.usermanagementservice.dto.UpdateUserRequest;
 import tn.esprit.usermanagementservice.dto.UserProfileDTO;
 import tn.esprit.usermanagementservice.entity.Role;
@@ -590,5 +591,61 @@ class UserProfileServiceTest {
             assertEquals("User not found with id: 999", exception.getMessage());
         }
     }
+// ==================== CREATE USER WITH AUTH FAILURE TESTS ====================
+
+    @Nested
+    @DisplayName("Create User With Auth Failure Tests")
+    class CreateUserWithAuthFailureTests {
+
+        @Test
+        @DisplayName("Should delete user profile when auth service creation fails")
+        void createUser_AuthServiceFails_ShouldDeleteProfile() {
+            CreateUserRequest request = new CreateUserRequest();
+            request.setEmail("new@test.com");
+            request.setFirstName("John");
+            request.setLastName("Doe");
+            request.setRole(Role.STUDENT);
+            request.setPassword("password123");
+
+            UserProfile savedProfile = UserProfile.builder().id(1L).email("new@test.com").build();
+
+            when(userProfileRepository.existsByEmail("new@test.com")).thenReturn(false);
+            when(userProfileRepository.save(any(UserProfile.class)))
+                    .thenReturn(savedProfile);
+            when(authServiceClient.createUserByAdmin(any(AuthRegisterRequest.class), anyString()))
+                    .thenThrow(new RuntimeException("Auth service error"));
+            doNothing().when(userProfileRepository).delete(savedProfile);
+
+            RuntimeException exception = assertThrows(RuntimeException.class, () -> {
+                userProfileService.createUser(request, "Bearer admin-token");
+            });
+
+            assertTrue(exception.getMessage().contains("Failed to create user in auth service"));
+            verify(userProfileRepository, times(1)).delete(savedProfile);
+        }
+
+        @Test
+        @DisplayName("Should create user without auth service when no password provided")
+        void createUser_WithoutPassword_ShouldNotCallAuthService() {
+            CreateUserRequest request = new CreateUserRequest();
+            request.setEmail("new@test.com");
+            request.setFirstName("John");
+            request.setLastName("Doe");
+            request.setRole(Role.STUDENT);
+            request.setPassword(null);
+
+            when(userProfileRepository.existsByEmail("new@test.com")).thenReturn(false);
+            when(userProfileRepository.save(any(UserProfile.class)))
+                    .thenAnswer(invocation -> invocation.getArgument(0));
+
+            UserProfileDTO result = userProfileService.createUser(request, "Bearer admin-token");
+
+            assertNotNull(result);
+            assertEquals("new@test.com", result.getEmail());
+            verify(authServiceClient, never()).createUserByAdmin(any(), anyString());
+            verify(userProfileRepository, never()).delete(any());
+        }
+    }
+
 
 }

@@ -64,7 +64,7 @@ class ProfileChangeHistoryTest {
     }
 
     @Test
-    @DisplayName("Should handle null values")
+    @DisplayName("Should handle null values gracefully")
     void handleNullValues_ShouldNotThrow() {
         ProfileChangeHistory history = new ProfileChangeHistory();
         history.setEmail(null);
