@@ -590,4 +590,5 @@ class UserProfileServiceTest {
             assertEquals("User not found with id: 999", exception.getMessage());
         }
     }
+
 }
