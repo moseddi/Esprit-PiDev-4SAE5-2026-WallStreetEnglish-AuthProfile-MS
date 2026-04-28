@@ -6,7 +6,7 @@ import tn.esprit.usermanagementservice.dto.AuthRegisterRequest;
 import tn.esprit.usermanagementservice.dto.AuthResponse;
 import tn.esprit.usermanagementservice.dto.RoleUpdateRequest;
 
-@FeignClient(name = "AUTH-SERVICE", url = "http://localhost:8081")
+@FeignClient(name = "AUTH-SERVICE", url = "${auth.service.url}")
 public interface AuthServiceClient {
 
     @PostMapping("/api/auth/register")
@@ -18,7 +18,6 @@ public interface AuthServiceClient {
             @RequestHeader("Authorization") String authorizationHeader
     );
 
-    // 🔥 NEW: Update user role in auth service
     @PutMapping("/api/auth/admin/role")
     AuthResponse updateUserRole(
             @RequestBody RoleUpdateRequest request,

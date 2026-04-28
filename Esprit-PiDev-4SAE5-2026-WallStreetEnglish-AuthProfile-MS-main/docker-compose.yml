@@ -9,7 +9,6 @@ volumes:
 
 services:
 
-  # ── 1. MySQL ─────────────────────────────────────────────────────────────
   mysql:
     image: mysql:8.0
     container_name: mysql
@@ -17,10 +16,12 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_ROOT_HOST: '%'
+      MYSQL_DATABASE: auth_db
     ports:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - wallstreet-net
     healthcheck:
@@ -30,9 +31,6 @@ services:
       retries: 10
       start_period: 20s
 
-  # ── 2. Keycloak ───────────────────────────────────────────────────────────
-  # No healthcheck — Keycloak 25 changed health endpoints.
-  # Services use restart: on-failure to retry until Keycloak is ready.
   keycloak:
     image: quay.io/keycloak/keycloak:25.0.6
     container_name: keycloak
@@ -41,6 +39,10 @@ services:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
       KC_DB: dev-file
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: 6083
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
     command: start-dev --import-realm
     ports:
       - "6083:8080"
@@ -51,7 +53,6 @@ services:
     networks:
       - wallstreet-net
 
-  # ── 3. RabbitMQ ───────────────────────────────────────────────────────────
   rabbitmq:
     image: rabbitmq:3.13-management
     container_name: rabbitmq
@@ -73,7 +74,6 @@ services:
       retries: 10
       start_period: 15s
 
-  # ── 4. Eureka ─────────────────────────────────────────────────────────────
   eureka:
     image: wallstreet/service-registry:latest
     container_name: eureka
@@ -82,9 +82,13 @@ services:
       - "8761:8761"
     networks:
       - wallstreet-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8761/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
-  # ── 5. Auth Service ───────────────────────────────────────────────────────
-  # restart: on-failure ensures it retries if Keycloak is not ready yet
   auth-service:
     image: wallstreet/auth-service:latest
     container_name: auth-service
@@ -98,8 +102,12 @@ services:
       SPRING_RABBITMQ_USERNAME: guest
       SPRING_RABBITMQ_PASSWORD: guest
       KEYCLOAK_SERVER_URL: http://keycloak:8080
-      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:8080/realms/myapp2
+      KEYCLOAK_ADMIN_USERNAME: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KEYCLOAK_CLIENT_ID: admin-cli
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://host.docker.internal:6083/realms/myapp2
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka:8761/eureka/
+      USER_SERVICE_URL: http://user-service:8082
     ports:
       - "8081:8081"
     depends_on:
@@ -107,11 +115,11 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      eureka:
+        condition: service_healthy
     networks:
       - wallstreet-net
 
-  # ── 6. User Management Service ────────────────────────────────────────────
-  # restart: on-failure ensures it retries if Keycloak is not ready yet
   user-service:
     image: wallstreet/user-management-service:latest
     container_name: user-service
@@ -124,7 +132,7 @@ services:
       SPRING_RABBITMQ_PORT: 5672
       SPRING_RABBITMQ_USERNAME: guest
       SPRING_RABBITMQ_PASSWORD: guest
-      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:8080/realms/myapp2
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://host.docker.internal:6083/realms/myapp2
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka:8761/eureka/
       AUTH_SERVICE_URL: http://auth-service:8081
     ports:
@@ -134,10 +142,13 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      eureka:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
     networks:
       - wallstreet-net
 
-  # ── 7. API Gateway ────────────────────────────────────────────────────────
   api-gateway:
     image: wallstreet/api-gateway:latest
     container_name: api-gateway
@@ -153,6 +164,7 @@ services:
     ports:
       - "8089:8089"
     depends_on:
-      - eureka
+      eureka:
+        condition: service_healthy
     networks:
       - wallstreet-net

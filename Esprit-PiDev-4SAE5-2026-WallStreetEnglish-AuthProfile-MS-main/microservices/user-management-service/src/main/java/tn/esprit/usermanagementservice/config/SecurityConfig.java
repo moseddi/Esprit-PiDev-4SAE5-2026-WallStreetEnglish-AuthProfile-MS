@@ -1,5 +1,6 @@
 package tn.esprit.usermanagementservice.config;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -15,13 +16,15 @@ import static org.springframework.security.config.Customizer.withDefaults;
 @EnableWebSecurity
 public class SecurityConfig {
 
+    @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri}")
+    private String issuerUri;
+
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
                 .cors(cors -> cors.disable())
                 .authorizeHttpRequests(auth -> auth
-                        // Public endpoints
                         .requestMatchers("/api/users/from-auth").permitAll()
                         .requestMatchers("/api/users/record-login").permitAll()
                         .requestMatchers("/api/users/record-logout").permitAll()
@@ -35,20 +38,14 @@ public class SecurityConfig {
                         .requestMatchers("/api/users/logins/suspicious-count").permitAll()
                         .requestMatchers("/api/users/active-sessions").permitAll()
                         .requestMatchers("/api/users/statistics").permitAll()
-
-                        // ✅ REACTIVATION & UNBLOCK ENDPOINTS (Public)
                         .requestMatchers("/api/users/reactivate/**").permitAll()
                         .requestMatchers("/api/users/reactivate-request").permitAll()
                         .requestMatchers("/api/users/check-blocked/**").permitAll()
                         .requestMatchers("/api/users/unblock/**").permitAll()
-
-                        // WebSocket endpoints
                         .requestMatchers("/ws/**").permitAll()
                         .requestMatchers("/ws/info").permitAll()
                         .requestMatchers("/topic/**").permitAll()
                         .requestMatchers("/app/**").permitAll()
-
-                        // Protected endpoints (admin only)
                         .requestMatchers("/api/users/email/**").authenticated()
                         .requestMatchers("/api/users/profile/**").authenticated()
                         .requestMatchers("/api/users/force-logout/**").authenticated()
@@ -67,10 +64,9 @@ public class SecurityConfig {
 
     @Bean
     public JwtDecoder jwtDecoder() {
+        String jwkSetUri = issuerUri + "/protocol/openid-connect/certs";
         return NimbusJwtDecoder
-                .withJwkSetUri(
-                        "http://localhost:6083/realms/myapp2/protocol/openid-connect/certs"
-                )
+                .withJwkSetUri(jwkSetUri)
                 .build();
     }
 }

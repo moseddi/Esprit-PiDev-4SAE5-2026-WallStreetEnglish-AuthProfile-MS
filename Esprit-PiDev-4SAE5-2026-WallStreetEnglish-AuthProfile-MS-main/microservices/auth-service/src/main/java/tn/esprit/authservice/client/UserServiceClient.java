@@ -4,7 +4,7 @@ import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
-@FeignClient(name = "user-management-service", url = "http://localhost:8082")
+@FeignClient(name = "user-management-service", url = "${user.service.url}")
 public interface UserServiceClient {
 
     @PostMapping("/api/users/from-auth")
@@ -17,6 +17,7 @@ public interface UserServiceClient {
 
     @PostMapping("/api/users/record-login")
     void recordUserLogin(@RequestParam("email") String email);
+
     @PostMapping("/api/users/record-logout")
     void recordUserLogout(@RequestParam String email, @RequestParam String logoutType);
 }
