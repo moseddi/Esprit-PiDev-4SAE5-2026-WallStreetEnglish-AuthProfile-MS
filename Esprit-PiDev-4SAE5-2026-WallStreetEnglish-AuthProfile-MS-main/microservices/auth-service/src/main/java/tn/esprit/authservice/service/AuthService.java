@@ -301,7 +301,27 @@ public class AuthService {
                 throw new RuntimeException("Your account is blocked. Please check your email for reactivation instructions.");
             }
 
-            log.info("User found in database with role: {}", user.getRole());
+            // ✅ READ ROLE FROM KEYCLOAK JWT — not from local DB.
+            // The local DB can be stale if a role-update failed to sync.
+            // The JWT is always the source of truth because Keycloak was updated directly.
+            String accessToken = (String) tokenResponse.get("access_token");
+            Role roleFromJwt = extractRoleFromJwt(accessToken);
+
+            if (roleFromJwt != null) {
+                if (roleFromJwt != user.getRole()) {
+                    log.info("🔄 Role mismatch detected for {}: DB={} JWT={} — syncing local DB",
+                            user.getEmail(), user.getRole(), roleFromJwt);
+                    user.setRole(roleFromJwt);
+                    userRepository.save(user);
+                }
+            } else {
+                // JWT has no business role — fall back to DB value
+                roleFromJwt = user.getRole();
+                log.warn("⚠️ No business role found in JWT for {}, falling back to DB role: {}",
+                        user.getEmail(), roleFromJwt);
+            }
+
+            log.info("✅ Effective role for login response: {}", roleFromJwt);
 
             try {
                 userServiceClient.recordUserLogin(request.getEmail());
@@ -319,10 +339,10 @@ public class AuthService {
             }
 
             return AuthResponse.builder()
-                    .token((String) tokenResponse.get("access_token"))
+                    .token(accessToken)
                     .refreshToken((String) tokenResponse.get("refresh_token"))
                     .email(user.getEmail())
-                    .role(user.getRole())
+                    .role(roleFromJwt)          // ← always from Keycloak JWT
                     .userId(user.getId())
                     .message("Login successful")
                     .build();
@@ -360,6 +380,50 @@ public class AuthService {
             log.error("Logout failed: {}", e.getMessage());
             throw new RuntimeException("Logout failed: " + e.getMessage());
         }
+    }
+
+    /**
+     * Decodes the Keycloak JWT and extracts the first matching business role
+     * from realm_access.roles (ADMIN, TUTOR, STUDENT).
+     * Returns null if no business role is found.
+     */
+    private Role extractRoleFromJwt(String accessToken) {
+        try {
+            String[] parts = accessToken.split("\\.");
+            if (parts.length < 2) return null;
+
+            // Base64url-decode the payload (add padding if needed)
+            String padded = parts[1];
+            int mod = padded.length() % 4;
+            if (mod != 0) padded = padded + "=".repeat(4 - mod);
+
+            String payload = new String(java.util.Base64.getUrlDecoder().decode(padded));
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> claims = mapper.readValue(payload, java.util.Map.class);
+
+            // realm_access.roles is the standard Keycloak location for realm roles
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> realmAccess = (java.util.Map<String, Object>) claims.get("realm_access");
+            if (realmAccess != null) {
+                @SuppressWarnings("unchecked")
+                java.util.List<String> roles = (java.util.List<String>) realmAccess.get("roles");
+                if (roles != null) {
+                    for (String r : roles) {
+                        try {
+                            Role role = Role.valueOf(r);
+                            log.info("✅ Role extracted from JWT: {}", role);
+                            return role;
+                        } catch (IllegalArgumentException ignored) {
+                            // Not a business role (e.g. default-roles-myapp2), skip
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("⚠️ Could not extract role from JWT: {}", e.getMessage());
+        }
+        return null;
     }
 
     private Map<String, Object> getTokenFromKeycloak(String username, String password) {
