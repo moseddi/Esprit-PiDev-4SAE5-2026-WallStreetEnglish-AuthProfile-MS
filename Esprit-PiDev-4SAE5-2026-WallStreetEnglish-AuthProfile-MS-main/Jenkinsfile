@@ -173,7 +173,7 @@ pipeline {
 
                 // Helper: poll a URL until it returns {"status":"UP"} or timeout
                 script {
-                    def waitForService = { String name, String url, int retries, String expected = '"status":"UP"' ->
+                    def waitForService = { String name, String url, int retries, String expected ->
                         for (int i = 0; i < retries; i++) {
                             def status = sh(
                                 script: "curl --silent --max-time 5 ${url} | grep -c '${expected}' || true",
@@ -190,14 +190,14 @@ pipeline {
                     }
 
                     // Infrastructure checks
-                    waitForService('Eureka',       'http://localhost:8761/actuator/health',  12)
+                    waitForService('Eureka',       'http://localhost:8761/actuator/health',  12, '"status":"UP"')
                     waitForService('Keycloak',     'http://localhost:6083/realms/master',    18, '"realm":"master"')
                     waitForService('RabbitMQ',     'http://localhost:15672',                 12, 'RabbitMQ')
 
                     // Application checks
-                    waitForService('Auth Service', 'http://localhost:8081/actuator/health',  12)
-                    waitForService('User Service', 'http://localhost:8082/actuator/health',  12)
-                    waitForService('API Gateway',  'http://localhost:8089/actuator/health',  12)
+                    waitForService('Auth Service', 'http://localhost:8081/actuator/health',  12, '"status":"UP"')
+                    waitForService('User Service', 'http://localhost:8082/actuator/health',  12, '"status":"UP"')
+                    waitForService('API Gateway',  'http://localhost:8089/actuator/health',  12, '"status":"UP"')
                 }
             }
         }
