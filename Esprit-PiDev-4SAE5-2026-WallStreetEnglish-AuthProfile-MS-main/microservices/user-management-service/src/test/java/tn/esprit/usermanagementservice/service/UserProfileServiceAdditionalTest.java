@@ -61,6 +61,10 @@ class UserProfileServiceAdditionalTest {
 
     @BeforeEach
     void setUp() {
+        // inject the @Lazy self-reference that @InjectMocks cannot wire
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                userProfileService, "self", userProfileService);
+
         user = UserProfile.builder()
                 .id(1L)
                 .email("student@test.com")

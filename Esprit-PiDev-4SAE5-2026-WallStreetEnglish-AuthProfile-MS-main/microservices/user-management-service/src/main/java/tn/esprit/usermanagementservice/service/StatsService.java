@@ -135,7 +135,7 @@ public class StatsService {
                 .map(this::convertToActivityDTO)
                 .sorted((a, b) -> Integer.compare(b.getLoginCount(), a.getLoginCount()))
                 .limit(limit)
-                .collect(Collectors.toList());
+                .toList();
     }
 
     private List<UserActivityDTO> getRecentLogins(List<UserProfile> users, int limit) {
@@ -144,7 +144,7 @@ public class StatsService {
                 .map(this::convertToActivityDTO)
                 .sorted((a, b) -> b.getLastLogin().compareTo(a.getLastLogin()))
                 .limit(limit)
-                .collect(Collectors.toList());
+                .toList();
     }
 
     private UserActivityDTO convertToActivityDTO(UserProfile user) {
@@ -194,7 +194,7 @@ public class StatsService {
     // Stats pour un utilisateur spécifique
     public UserActivityDTO getUserActivityStats(Long userId) {
         UserProfile user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new IllegalArgumentException("User not found with id: " + userId));
         return convertToActivityDTO(user);
     }
 }

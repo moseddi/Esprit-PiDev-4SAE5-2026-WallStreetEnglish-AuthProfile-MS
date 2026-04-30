@@ -250,7 +250,7 @@ class StatsServiceTest {
                 statsService.getUserActivityStats(999L);
             });
 
-            assertEquals("User not found", exception.getMessage());
+            assertEquals("User not found with id: 999", exception.getMessage());
         }
 
         @Test

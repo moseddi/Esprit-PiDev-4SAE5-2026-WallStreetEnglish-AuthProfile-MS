@@ -47,7 +47,7 @@ public class KeycloakConfig {
             return keycloak;
         } catch (Exception e) {
             log.error("Failed to initialize Keycloak admin client: {}", e.getMessage(), e);
-            throw new RuntimeException("Keycloak initialization failed", e);
+            throw new IllegalStateException("Keycloak initialization failed", e);
         }
     }
 

@@ -73,6 +73,10 @@ class UserProfileServiceTest {
 
     @BeforeEach
     void setUp() {
+        // inject the @Lazy self-reference that @InjectMocks cannot wire
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                userProfileService, "self", userProfileService);
+
         testUser = UserProfile.builder()
                 .id(1L)
                 .email("student@test.com")
@@ -432,17 +436,15 @@ class UserProfileServiceTest {
         }
 
         @Test
-        @DisplayName("Should update existing user - method saves/updates existing users")
+        @DisplayName("Should skip save when user already exists")
         void createMinimalProfile_ExistingUser_ShouldUpdate() {
-            when(userProfileRepository.findByEmail("student@test.com"))
-                    .thenReturn(Optional.of(testUser));
-            when(userProfileRepository.save(any(UserProfile.class)))
-                    .thenAnswer(invocation -> invocation.getArgument(0));
+            when(userProfileRepository.existsByEmail("student@test.com"))
+                    .thenReturn(true);
 
             userProfileService.createMinimalProfile("student@test.com", Role.STUDENT);
 
-            // Your actual implementation saves even for existing users
-            verify(userProfileRepository, times(1)).save(any());
+            // existing user — save is skipped
+            verify(userProfileRepository, never()).save(any());
         }
     }
 

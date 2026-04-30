@@ -32,24 +32,24 @@ class EmailServiceTest {
     void setUp() {
         testEmail = "student@test.com";
         testResetLink = "http://localhost:4200/reset-password?token=abc123";
+        // inject the @Value field that won't be set by @InjectMocks alone
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                emailService, "mailFrom", "noreply@wallstreetenglish.com");
     }
 
     @Test
     @DisplayName("Should send reset password email successfully")
     void sendResetLink_Success_ShouldSendEmail() {
-        // Arrange
         doNothing().when(mailSender).send(any(SimpleMailMessage.class));
 
-        // Act
         emailService.sendResetLink(testEmail, testResetLink);
 
-        // Assert
         ArgumentCaptor<SimpleMailMessage> messageCaptor = ArgumentCaptor.forClass(SimpleMailMessage.class);
         verify(mailSender, times(1)).send(messageCaptor.capture());
 
         SimpleMailMessage sentMessage = messageCaptor.getValue();
         assertEquals(testEmail, sentMessage.getTo()[0]);
-        assertEquals("seddik202209@gmail.com", sentMessage.getFrom());
+        assertEquals("noreply@wallstreetenglish.com", sentMessage.getFrom());
         assertTrue(sentMessage.getSubject().contains("Reset your Wall Street English password"));
         assertTrue(sentMessage.getText().contains(testResetLink));
     }
@@ -57,10 +57,8 @@ class EmailServiceTest {
     @Test
     @DisplayName("Should handle email sending failure gracefully")
     void sendResetLink_EmailFails_ShouldNotThrowException() {
-        // Arrange
         doThrow(new RuntimeException("SMTP server down")).when(mailSender).send(any(SimpleMailMessage.class));
 
-        // Act & Assert - Should not throw exception
         assertDoesNotThrow(() -> emailService.sendResetLink(testEmail, testResetLink));
 
         verify(mailSender, times(1)).send(any(SimpleMailMessage.class));

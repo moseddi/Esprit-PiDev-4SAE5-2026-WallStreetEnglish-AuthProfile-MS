@@ -23,6 +23,12 @@ class EmailServiceExtendedTest {
     @Mock private JavaMailSender mailSender;
     @InjectMocks private EmailService emailService;
 
+    @BeforeEach
+    void setUp() {
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                emailService, "mailFrom", "noreply@wallstreetenglish.com");
+    }
+
     @Nested
     @DisplayName("sendResetLink - content validation")
     class ContentValidationTests {

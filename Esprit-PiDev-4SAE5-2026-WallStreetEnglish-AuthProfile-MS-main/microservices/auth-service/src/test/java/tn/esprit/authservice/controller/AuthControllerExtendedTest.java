@@ -217,7 +217,7 @@ class AuthControllerExtendedTest {
     class ResetPasswordTests {
 
         @Test
-        @DisplayName("Should return 400 when token is missing")
+        @DisplayName("Should return 422 when token is missing")
         void resetPassword_MissingToken_Returns400() throws Exception {
             Map<String, String> body = new HashMap<>();
             body.put("newPassword", "newpass123");
@@ -226,12 +226,12 @@ class AuthControllerExtendedTest {
             mockMvc.perform(post("/api/auth/reset-password")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(body)))
-                    .andExpect(status().isBadRequest())
+                    .andExpect(status().isUnprocessableEntity())
                     .andExpect(jsonPath("$.message").value("Missing required fields"));
         }
 
         @Test
-        @DisplayName("Should return 400 when newPassword is missing")
+        @DisplayName("Should return 422 when newPassword is missing")
         void resetPassword_MissingNewPassword_Returns400() throws Exception {
             Map<String, String> body = new HashMap<>();
             body.put("token", "some-token");
@@ -240,12 +240,12 @@ class AuthControllerExtendedTest {
             mockMvc.perform(post("/api/auth/reset-password")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(body)))
-                    .andExpect(status().isBadRequest())
+                    .andExpect(status().isUnprocessableEntity())
                     .andExpect(jsonPath("$.message").value("Missing required fields"));
         }
 
         @Test
-        @DisplayName("Should return 400 when passwords do not match")
+        @DisplayName("Should return 422 when passwords do not match")
         void resetPassword_PasswordMismatch_Returns400() throws Exception {
             Map<String, String> body = new HashMap<>();
             body.put("token", "some-token");
@@ -255,12 +255,12 @@ class AuthControllerExtendedTest {
             mockMvc.perform(post("/api/auth/reset-password")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(body)))
-                    .andExpect(status().isBadRequest())
+                    .andExpect(status().isUnprocessableEntity())
                     .andExpect(jsonPath("$.message").value("Passwords do not match"));
         }
 
         @Test
-        @DisplayName("Should return 400 when password is too short")
+        @DisplayName("Should return 422 when password is too short")
         void resetPassword_ShortPassword_Returns400() throws Exception {
             Map<String, String> body = new HashMap<>();
             body.put("token", "some-token");
@@ -270,12 +270,12 @@ class AuthControllerExtendedTest {
             mockMvc.perform(post("/api/auth/reset-password")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(body)))
-                    .andExpect(status().isBadRequest())
+                    .andExpect(status().isUnprocessableEntity())
                     .andExpect(jsonPath("$.message").value("Password must be at least 6 characters"));
         }
 
         @Test
-        @DisplayName("Should return 400 when token is invalid")
+        @DisplayName("Should return 422 when token is invalid")
         void resetPassword_InvalidToken_Returns400() throws Exception {
             Map<String, String> body = new HashMap<>();
             body.put("token", "invalid-token-xyz");
@@ -285,7 +285,7 @@ class AuthControllerExtendedTest {
             mockMvc.perform(post("/api/auth/reset-password")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(body)))
-                    .andExpect(status().isBadRequest())
+                    .andExpect(status().isUnprocessableEntity())
                     .andExpect(jsonPath("$.message").value("Invalid or expired token"));
         }
     }
@@ -299,7 +299,7 @@ class AuthControllerExtendedTest {
         void validateResetToken_UnknownToken_ReturnsInvalid() throws Exception {
             mockMvc.perform(get("/api/auth/validate-reset-token")
                             .param("token", "not-a-real-token"))
-                    .andExpect(status().isBadRequest())
+                    .andExpect(status().isUnprocessableEntity())
                     .andExpect(jsonPath("$.valid").value(false));
         }
     }

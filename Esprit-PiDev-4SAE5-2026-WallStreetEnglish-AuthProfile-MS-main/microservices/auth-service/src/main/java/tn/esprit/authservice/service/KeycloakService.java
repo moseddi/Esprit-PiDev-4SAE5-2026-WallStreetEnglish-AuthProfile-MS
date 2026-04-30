@@ -32,7 +32,7 @@ public class KeycloakService {
             // Find user in Keycloak
             List<UserRepresentation> users = keycloakAdmin.realm(realm).users().search(email);
             if (users.isEmpty()) {
-                throw new RuntimeException("User not found in Keycloak");
+                throw new IllegalArgumentException("User not found in Keycloak");
             }
 
             String userId = users.get(0).getId();
@@ -71,8 +71,8 @@ public class KeycloakService {
             log.info("✅ User logged out from all sessions");
 
         } catch (Exception e) {
-            log.error("❌ Failed to update role in Keycloak: {}", e.getMessage(), e);
-            throw new RuntimeException("Failed to update role in Keycloak", e);
+            log.error("Failed to update role in Keycloak: {}", e.getMessage(), e);
+            throw new IllegalStateException("Failed to update role in Keycloak", e);
         }
     }
 

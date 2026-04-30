@@ -29,6 +29,8 @@ import java.util.Optional;
 @Slf4j
 public class UserProfileController {
 
+    private static final int HOURS_24 = 24;
+
     private final UserProfileService userProfileService;
     private final KeycloakAdminService keycloakAdminService;
     private final LoginHistoryRepository loginHistoryRepository;
@@ -126,7 +128,7 @@ public class UserProfileController {
 
     @GetMapping("/logins/today")
     public ResponseEntity<List<LoginHistory>> getTodayLogins() {
-        LocalDateTime since = LocalDateTime.now().minusHours(24);
+        LocalDateTime since = LocalDateTime.now().minusHours(HOURS_24);
         return ResponseEntity.ok(loginHistoryRepository.findByLoginTimeAfterOrderByLoginTimeDesc(since));
     }
 
@@ -137,7 +139,7 @@ public class UserProfileController {
 
     @GetMapping("/logins/suspicious-count")
     public ResponseEntity<Long> getSuspiciousCount() {
-        LocalDateTime since = LocalDateTime.now().minusHours(24);
+        LocalDateTime since = LocalDateTime.now().minusHours(HOURS_24);
         return ResponseEntity.ok(loginHistoryRepository.countBySuspiciousAndLoginTimeAfter(true, since));
     }
 
@@ -146,6 +148,9 @@ public class UserProfileController {
         log.info("=== SYNC USER FROM AUTH: {}", userData);
         String email = (String) userData.get("email");
         String role = (String) userData.get("role");
+        if (email == null || role == null) {
+            return ResponseEntity.badRequest().build();
+        }
         return ResponseEntity.ok(userProfileService.syncUserFromAuth(email, role));
     }
 
@@ -156,7 +161,7 @@ public class UserProfileController {
 
     @GetMapping("/statistics")
     public ResponseEntity<Map<String, Object>> getStatistics() {
-        LocalDateTime twentyFourHoursAgo = LocalDateTime.now().minusHours(24);
+        LocalDateTime twentyFourHoursAgo = LocalDateTime.now().minusHours(HOURS_24);
         List<LoginHistory> events = loginHistoryRepository.findAllEventsLast24h(twentyFourHoursAgo);
 
         long logins = events.stream().filter(e -> e.getType() == LoginHistory.EventType.LOGIN).count();
@@ -176,13 +181,13 @@ public class UserProfileController {
 
     @GetMapping("/recent-logins-formatted")
     public ResponseEntity<List<String>> getRecentLoginsFormatted() {
-        LocalDateTime twentyFourHoursAgo = LocalDateTime.now().minusHours(24);
+        LocalDateTime twentyFourHoursAgo = LocalDateTime.now().minusHours(HOURS_24);
         List<LoginHistory> events = loginHistoryRepository.findAllEventsLast24h(twentyFourHoursAgo);
 
         List<String> messages = events.stream()
                 .map(LoginHistory::getMessage)
                 .limit(50)
-                .collect(Collectors.toList());
+                .toList();
 
         log.info("📋 Returning {} events from last 24 hours", messages.size());
         return ResponseEntity.ok(messages);

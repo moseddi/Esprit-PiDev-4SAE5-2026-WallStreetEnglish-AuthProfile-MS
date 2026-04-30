@@ -379,7 +379,7 @@ class AuthControllerCoverageTest {
     class ResetPasswordTests {
 
         @Test
-        @DisplayName("Missing fields - returns 400")
+        @DisplayName("Missing fields - returns 422")
         void resetPassword_MissingFields_Returns400() throws Exception {
             Map<String, String> body = new HashMap<>();
             body.put("token", null);
@@ -389,12 +389,12 @@ class AuthControllerCoverageTest {
             mockMvc.perform(post("/api/auth/reset-password")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(body)))
-                    .andExpect(status().isBadRequest())
+                    .andExpect(status().isUnprocessableEntity())
                     .andExpect(jsonPath("$.message").value("Missing required fields"));
         }
 
         @Test
-        @DisplayName("Passwords do not match - returns 400")
+        @DisplayName("Passwords do not match - returns 422")
         void resetPassword_PasswordsMismatch_Returns400() throws Exception {
             Map<String, String> body = Map.of(
                     "token", "some-token",
@@ -405,12 +405,12 @@ class AuthControllerCoverageTest {
             mockMvc.perform(post("/api/auth/reset-password")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(body)))
-                    .andExpect(status().isBadRequest())
+                    .andExpect(status().isUnprocessableEntity())
                     .andExpect(jsonPath("$.message").value("Passwords do not match"));
         }
 
         @Test
-        @DisplayName("Password too short - returns 400")
+        @DisplayName("Password too short - returns 422")
         void resetPassword_PasswordTooShort_Returns400() throws Exception {
             Map<String, String> body = Map.of(
                     "token", "some-token",
@@ -421,12 +421,12 @@ class AuthControllerCoverageTest {
             mockMvc.perform(post("/api/auth/reset-password")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(body)))
-                    .andExpect(status().isBadRequest())
+                    .andExpect(status().isUnprocessableEntity())
                     .andExpect(jsonPath("$.message").value("Password must be at least 6 characters"));
         }
 
         @Test
-        @DisplayName("Invalid token - returns 400")
+        @DisplayName("Invalid token - returns 422")
         void resetPassword_InvalidToken_Returns400() throws Exception {
             Map<String, String> body = Map.of(
                     "token", "invalid-token-xyz",
@@ -437,7 +437,7 @@ class AuthControllerCoverageTest {
             mockMvc.perform(post("/api/auth/reset-password")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(body)))
-                    .andExpect(status().isBadRequest())
+                    .andExpect(status().isUnprocessableEntity())
                     .andExpect(jsonPath("$.message").value("Invalid or expired token"));
         }
     }
@@ -449,11 +449,11 @@ class AuthControllerCoverageTest {
     class ValidateResetTokenTests {
 
         @Test
-        @DisplayName("Invalid token - returns 400 with valid=false")
+        @DisplayName("Invalid token - returns 422 with valid=false")
         void validateResetToken_InvalidToken_Returns400() throws Exception {
             mockMvc.perform(get("/api/auth/validate-reset-token")
                             .param("token", "nonexistent-token"))
-                    .andExpect(status().isBadRequest())
+                    .andExpect(status().isUnprocessableEntity())
                     .andExpect(jsonPath("$.valid").value(false));
         }
     }
