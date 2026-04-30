@@ -134,7 +134,7 @@ public class AuthService {
     private void validateEmailNotExists(String email) {
         if (userRepository.findByEmail(email).isPresent()) {
             log.error("❌ Email already exists in database: {}", email);
-            throw new EmailAlreadyExistsException("Email already exists: " + email);
+            throw new EmailAlreadyExistsException("Email already exists");
         }
     }
 
@@ -158,7 +158,7 @@ public class AuthService {
 
             return buildAuthResponse(savedUser, tokenResult);
 
-        } catch (EmailAlreadyExistsException | KeycloakException e) {
+        } catch (EmailAlreadyExistsException e) {
             throw e;
         } catch (Exception e) {
             log.error("========== REGISTRATION FAILED ==========");
@@ -385,7 +385,7 @@ public class AuthService {
             validateTokenResponse(tokenResponse);
 
             User user = userRepository.findByEmail(request.getEmail())
-                    .orElseThrow(() -> new UserNotFoundException("User not found in database: " + request.getEmail()));
+                    .orElseThrow(() -> new UserNotFoundException("User not found in database"));
 
             if (isUserBlocked(request.getEmail())) {
                 throw new UserBlockedException("Your account is blocked. Please check your email for reactivation instructions.");
@@ -410,7 +410,7 @@ public class AuthService {
                     .message("Login successful")
                     .build();
 
-        } catch (UserNotFoundException | UserBlockedException | KeycloakException e) {
+        } catch (UserBlockedException e) {
             throw e;
         } catch (Exception e) {
             log.error("Login failed: {}", e.getMessage());
@@ -458,7 +458,7 @@ public class AuthService {
             log.info("Logging out user: {}", email);
 
             User user = userRepository.findByEmail(email)
-                    .orElseThrow(() -> new UserNotFoundException("User not found in database: " + email));
+                    .orElseThrow(() -> new UserNotFoundException("Logout failed: User not found in database"));
 
             LogoutType type = logoutType != null ? LogoutType.valueOf(logoutType) : LogoutType.VOLUNTARY;
             sendLogoutEventToRabbitMQ(user, type);
