@@ -21,6 +21,13 @@ import java.util.stream.Collectors;
 @CrossOrigin(origins = "http://localhost:4200")
 public class StatsController {
 
+    private static final String FIELD_EMAIL = "email";
+    private static final String FIELD_FIRST_NAME = "firstName";
+    private static final String FIELD_LAST_NAME = "lastName";
+    private static final String FIELD_LAST_LOGIN = "lastLogin";
+    private static final String FIELD_LOGIN_COUNT = "loginCount";
+    private static final String FIELD_ACCOUNT_AGE = "accountAge";
+
     private final UserProfileRepository userProfileRepository;
 
     @GetMapping("/dashboard")
@@ -137,16 +144,16 @@ public class StatsController {
                 .map(u -> {
                     Map<String, Object> userMap = new HashMap<>();
                     userMap.put("id", u.getId());
-                    userMap.put("email", u.getEmail());
-                    userMap.put("firstName", u.getFirstName());
-                    userMap.put("lastName", u.getLastName());
+                    userMap.put(FIELD_EMAIL, u.getEmail());
+                    userMap.put(FIELD_FIRST_NAME, u.getFirstName());
+                    userMap.put(FIELD_LAST_NAME, u.getLastName());
                     userMap.put("role", u.getRole() != null ? u.getRole().toString() : null);
                     userMap.put("city", u.getCity());
-                    userMap.put("lastLogin", u.getLastLoginAt());
-                    userMap.put("loginCount", u.getLoginCount());
+                    userMap.put(FIELD_LAST_LOGIN, u.getLastLoginAt());
+                    userMap.put(FIELD_LOGIN_COUNT, u.getLoginCount());
                     return userMap;
                 })
-                .collect(Collectors.toList());
+                .toList();
     }
 
     private List<Map<String, Object>> getRecentLogins(List<UserProfile> users, int limit) {
@@ -157,14 +164,14 @@ public class StatsController {
                 .map(u -> {
                     Map<String, Object> userMap = new HashMap<>();
                     userMap.put("id", u.getId());
-                    userMap.put("email", u.getEmail());
-                    userMap.put("firstName", u.getFirstName());
-                    userMap.put("lastName", u.getLastName());
-                    userMap.put("lastLogin", u.getLastLoginAt());
-                    userMap.put("loginCount", u.getLoginCount());
+                    userMap.put(FIELD_EMAIL, u.getEmail());
+                    userMap.put(FIELD_FIRST_NAME, u.getFirstName());
+                    userMap.put(FIELD_LAST_NAME, u.getLastName());
+                    userMap.put(FIELD_LAST_LOGIN, u.getLastLoginAt());
+                    userMap.put(FIELD_LOGIN_COUNT, u.getLoginCount());
                     return userMap;
                 })
-                .collect(Collectors.toList());
+                .toList();
     }
 
     private double calculateRetentionRate(List<UserProfile> users) {
@@ -301,18 +308,18 @@ public class StatsController {
                 .map(u -> {
                     Map<String, Object> activity = new HashMap<>();
                     activity.put("userId", u.getId());
-                    activity.put("email", u.getEmail());
-                    activity.put("firstName", u.getFirstName());
-                    activity.put("lastName", u.getLastName());
+                    activity.put(FIELD_EMAIL, u.getEmail());
+                    activity.put(FIELD_FIRST_NAME, u.getFirstName());
+                    activity.put(FIELD_LAST_NAME, u.getLastName());
                     activity.put("role", u.getRole());
                     activity.put("city", u.getCity());
-                    activity.put("lastLogin", u.getLastLoginAt());
-                    activity.put("loginCount", u.getLoginCount());
-                    activity.put("accountAge", ChronoUnit.DAYS.between(u.getCreatedAt(), LocalDateTime.now()));
+                    activity.put(FIELD_LAST_LOGIN, u.getLastLoginAt());
+                    activity.put(FIELD_LOGIN_COUNT, u.getLoginCount());
+                    activity.put(FIELD_ACCOUNT_AGE, ChronoUnit.DAYS.between(u.getCreatedAt(), LocalDateTime.now()));
                     return activity;
                 })
-                .sorted((a, b) -> ((LocalDateTime) b.get("lastLogin")).compareTo((LocalDateTime) a.get("lastLogin")))
-                .collect(Collectors.toList());
+                .sorted((a, b) -> ((LocalDateTime) b.get(FIELD_LAST_LOGIN)).compareTo((LocalDateTime) a.get(FIELD_LAST_LOGIN)))
+                .toList();
 
         return ResponseEntity.ok(recentActivity);
     }
@@ -326,12 +333,12 @@ public class StatsController {
         for (UserProfile user : users) {
             Map<String, Object> userData = new HashMap<>();
             userData.put("userId", user.getId());
-            userData.put("email", user.getEmail());
-            userData.put("firstName", user.getFirstName());
-            userData.put("lastName", user.getLastName());
+            userData.put(FIELD_EMAIL, user.getEmail());
+            userData.put(FIELD_FIRST_NAME, user.getFirstName());
+            userData.put(FIELD_LAST_NAME, user.getLastName());
             userData.put("role", user.getRole());
             userData.put("city", user.getCity());
-            userData.put("loginCount", user.getLoginCount());
+            userData.put(FIELD_LOGIN_COUNT, user.getLoginCount());
 
             // Créer un tableau de 7 jours (0-6) avec le nombre de connexions
             int[] weeklyActivity = new int[7];
@@ -341,16 +348,16 @@ public class StatsController {
             }
             userData.put("weeklyActivity", weeklyActivity);
 
-            // Dernière connexion formatée
-            userData.put("lastLogin", user.getLastLoginAt() != null ?
+            // Last login formatted
+            userData.put(FIELD_LAST_LOGIN, user.getLastLoginAt() != null ?
                     user.getLastLoginAt().toString() : null);
 
-            // Âge du compte
+            // Account age in days
             if (user.getCreatedAt() != null) {
                 long daysActive = ChronoUnit.DAYS.between(user.getCreatedAt(), LocalDateTime.now());
-                userData.put("accountAge", daysActive);
+                userData.put(FIELD_ACCOUNT_AGE, daysActive);
             } else {
-                userData.put("accountAge", 0);
+                userData.put(FIELD_ACCOUNT_AGE, 0);
             }
 
             usersData.add(userData);

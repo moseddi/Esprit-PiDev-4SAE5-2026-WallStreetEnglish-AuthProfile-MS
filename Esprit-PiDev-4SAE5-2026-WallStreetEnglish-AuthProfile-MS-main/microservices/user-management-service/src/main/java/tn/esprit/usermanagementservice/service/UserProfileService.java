@@ -3,6 +3,7 @@ package tn.esprit.usermanagementservice.service;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -25,7 +26,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 import tn.esprit.usermanagementservice.entity.ProfileChangeHistory;
 import tn.esprit.usermanagementservice.repository.ProfileChangeHistoryRepository;
@@ -37,6 +37,15 @@ import org.springframework.mail.javamail.JavaMailSender;
 @RequiredArgsConstructor
 public class UserProfileService {
 
+    private static final int SUSPICIOUS_COUNTRY_CHANGE_THRESHOLD = 5;
+    private static final int TOKEN_EXPIRY_HOURS = 24;
+    private static final String TIME_FORMAT = "HH:mm:ss";
+    private static final String TOPIC_LOGINS = "/topic/logins";
+    private static final String BEARER_PREFIX = "Bearer ";
+    private static final String USER_NOT_FOUND_EMAIL = "User not found with email: ";
+    private static final String USER_NOT_FOUND_ID = "User not found with id: ";
+    private static final String USER_NOT_FOUND = "User not found: ";
+
     private final UserProfileRepository userProfileRepository;
     private final AuthServiceClient authServiceClient;
     private final KeycloakAdminService keycloakAdminService;
@@ -46,6 +55,16 @@ public class UserProfileService {
     private final RabbitTemplate rabbitTemplate;
     private final SimpMessagingTemplate messagingTemplate;
     private final JavaMailSender mailSender;
+
+    @org.springframework.context.annotation.Lazy
+    @org.springframework.beans.factory.annotation.Autowired
+    private UserProfileService self;
+
+    @Value("${app.mail.from:noreply@wallstreetenglish.com}")
+    private String mailFrom;
+
+    @Value("${app.admin.email:admin@wallstreetenglish.com}")
+    private String adminEmail;
 
     private static ThreadLocal<String> creatingUsers = new ThreadLocal<>();
 
@@ -79,7 +98,7 @@ public class UserProfileService {
         creatingUsers.set(request.getEmail());
         try {
             if (userProfileRepository.existsByEmail(request.getEmail())) {
-                throw new RuntimeException("Email already exists in user management service");
+                throw new IllegalStateException("Email already exists in user management service");
             }
 
             UserProfile userProfile = UserProfile.builder()
@@ -116,9 +135,11 @@ public class UserProfileService {
             authRequest.setPassword(request.getPassword());
             authRequest.setConfirmPassword(request.getPassword());
             authRequest.setRole(request.getRole().name());
+            authRequest.setFirstName(request.getFirstName());
+            authRequest.setLastName(request.getLastName());
 
-            String cleanToken = (adminToken != null && !adminToken.startsWith("Bearer "))
-                    ? "Bearer " + adminToken
+            String cleanToken = (adminToken != null && !adminToken.startsWith(BEARER_PREFIX))
+                    ? BEARER_PREFIX + adminToken
                     : adminToken;
 
             AuthResponse response = authServiceClient.createUserByAdmin(authRequest, cleanToken);
@@ -126,148 +147,133 @@ public class UserProfileService {
         } catch (Exception e) {
             log.error("❌ Failed to create user in Auth Service: {}", e.getMessage());
             userProfileRepository.delete(savedProfile);
-            throw new RuntimeException("Failed to create user in auth service: " + e.getMessage());
+            throw new IllegalStateException("Failed to create user in auth service: " + e.getMessage());
         }
     }
+
 
     // ── Profile updates ──────────────────────────────────────────────────────
 
     @Transactional
     public UserProfileDTO updateUserProfile(String email, UpdateUserRequest request) {
         UserProfile userProfile = userProfileRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found with email: " + email));
+                .orElseThrow(() -> new IllegalArgumentException(USER_NOT_FOUND_EMAIL + email));
 
         Role oldRole = userProfile.getRole();
-        String timeStr = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
+        String timeStr = LocalDateTime.now().format(DateTimeFormatter.ofPattern(TIME_FORMAT));
 
-        // Track First Name change
-        if (request.getFirstName() != null && !request.getFirstName().isEmpty() && !request.getFirstName().equals(userProfile.getFirstName())) {
-            String oldValue = userProfile.getFirstName();
-            userProfile.setFirstName(request.getFirstName());
-            broadcastProfileChange(email, "first name", oldValue, request.getFirstName(), timeStr);
-        }
-
-        // Track Last Name change
-        if (request.getLastName() != null && !request.getLastName().isEmpty() && !request.getLastName().equals(userProfile.getLastName())) {
-            String oldValue = userProfile.getLastName();
-            userProfile.setLastName(request.getLastName());
-            broadcastProfileChange(email, "last name", oldValue, request.getLastName(), timeStr);
-        }
-
-        // Track Phone Number change
-        if (request.getPhoneNumber() != null && !request.getPhoneNumber().equals(userProfile.getPhoneNumber())) {
-            String oldValue = userProfile.getPhoneNumber();
-            userProfile.setPhoneNumber(request.getPhoneNumber());
-            broadcastProfileChange(email, "phone number", oldValue, request.getPhoneNumber(), timeStr);
-        }
-
-        // Track Address change
-        if (request.getAddress() != null && !request.getAddress().equals(userProfile.getAddress())) {
-            String oldValue = userProfile.getAddress();
-            userProfile.setAddress(request.getAddress());
-            broadcastProfileChange(email, "address", oldValue, request.getAddress(), timeStr);
-        }
-
-        // Track City change
-        if (request.getCity() != null && !request.getCity().equals(userProfile.getCity())) {
-            String oldValue = userProfile.getCity();
-            userProfile.setCity(request.getCity());
-            broadcastProfileChange(email, "city", oldValue, request.getCity(), timeStr);
-        }
-
-        // ✅ FIXED: Track Country change - allows first time setting
-        if (request.getCountry() != null) {
-            String oldCountry = userProfile.getCountry();
-
-            // Always set the country
-            userProfile.setCountry(request.getCountry());
-
-            // Only save to history and check suspicious if country actually changed (and not first time)
-            if (oldCountry != null && !oldCountry.equals(request.getCountry())) {
-                // Save to history table
-                ProfileChangeHistory history = ProfileChangeHistory.builder()
-                        .email(email)
-                        .fieldChanged("country")
-                        .oldValue(oldCountry)
-                        .newValue(request.getCountry())
-                        .changedAt(LocalDateTime.now())
-                        .build();
-                profileChangeHistoryRepository.save(history);
-                log.info("📝 Country change saved: {} from {} to {}", email, oldCountry, request.getCountry());
-
-                // ✅ CHECK SUSPICIOUS IMMEDIATELY
-                checkAndAlertSuspiciousCountryChanges(email, request.getCountry());
-            } else if (oldCountry == null) {
-                // First time setting country - just log it
-                log.info("📝 First country set for {}: {}", email, request.getCountry());
-            }
-
-            // Always broadcast the change
-            broadcastProfileChange(email, "country", oldCountry != null ? oldCountry : "Not set", request.getCountry(), timeStr);
-        }
-
-        // Track Date of Birth change
-        if (request.getDateOfBirth() != null && !request.getDateOfBirth().equals(userProfile.getDateOfBirth())) {
-            String oldValue = userProfile.getDateOfBirth() != null ? userProfile.getDateOfBirth().toString() : "null";
-            userProfile.setDateOfBirth(request.getDateOfBirth());
-            broadcastProfileChange(email, "date of birth", oldValue, request.getDateOfBirth().toString(), timeStr);
-        }
-
-        // Track Role change
-        if (request.getRole() != null && request.getRole() != oldRole) {
-            String oldValue = oldRole != null ? oldRole.name() : "null";
-            userProfile.setRole(request.getRole());
-            broadcastProfileChange(email, "role", oldValue, request.getRole().name(), timeStr);
-        }
-
-        // Track Active status change
-        if (request.getActive() != null && request.getActive() != userProfile.isActive()) {
-            String oldValue = String.valueOf(userProfile.isActive());
-            userProfile.setActive(request.getActive());
-            broadcastProfileChange(email, "active status", oldValue, String.valueOf(request.getActive()), timeStr);
-        }
+        applySimpleFieldUpdates(email, request, userProfile, timeStr);
+        applyCountryUpdate(email, request, userProfile, timeStr);
+        applyRoleAndStatusUpdates(email, request, userProfile, oldRole, timeStr);
 
         userProfile.recordActivity();
         UserProfile updatedProfile = userProfileRepository.save(userProfile);
-        log.info("✅ Profile updated for: {}", email);
+        log.info("Profile updated for: {}", email);
         return convertToDTO(updatedProfile);
     }
 
-    // ✅ Check suspicious on EVERY country change (real-time)
-    private void checkAndAlertSuspiciousCountryChanges(String email, String newCountry) {
-        LocalDateTime startOfDay = LocalDateTime.now().toLocalDate().atStartOfDay();
-        int countryChangesToday = profileChangeHistoryRepository.countCountryChangesToday(email, startOfDay);
-
-        // ✅ Don't add +1 - the history is already saved
-        int totalChanges = countryChangesToday;
-
-        if (totalChanges >= 5) {
-            // AUTO-BLOCK THE ACCOUNT
-            blockUser(email, "Suspicious: " + totalChanges + " country changes in one day");
-
-            String alertMessage = String.format("🚨 SUSPICIOUS & BLOCKED: %s changed country %d times today. Account blocked.",
-                    email, totalChanges);
-
-            messagingTemplate.convertAndSend("/topic/logins", alertMessage);
-            log.warn("🚨 {}", alertMessage);
+    private void applySimpleFieldUpdates(String email, UpdateUserRequest request,
+                                         UserProfile userProfile, String timeStr) {
+        if (request.getFirstName() != null && !request.getFirstName().isEmpty()
+                && !request.getFirstName().equals(userProfile.getFirstName())) {
+            String old = userProfile.getFirstName();
+            userProfile.setFirstName(request.getFirstName());
+            broadcastProfileChange(email, "first name", old, request.getFirstName(), timeStr);
+        }
+        if (request.getLastName() != null && !request.getLastName().isEmpty()
+                && !request.getLastName().equals(userProfile.getLastName())) {
+            String old = userProfile.getLastName();
+            userProfile.setLastName(request.getLastName());
+            broadcastProfileChange(email, "last name", old, request.getLastName(), timeStr);
+        }
+        if (request.getPhoneNumber() != null && !request.getPhoneNumber().equals(userProfile.getPhoneNumber())) {
+            String old = userProfile.getPhoneNumber();
+            userProfile.setPhoneNumber(request.getPhoneNumber());
+            broadcastProfileChange(email, "phone number", old, request.getPhoneNumber(), timeStr);
+        }
+        if (request.getAddress() != null && !request.getAddress().equals(userProfile.getAddress())) {
+            String old = userProfile.getAddress();
+            userProfile.setAddress(request.getAddress());
+            broadcastProfileChange(email, "address", old, request.getAddress(), timeStr);
+        }
+        if (request.getCity() != null && !request.getCity().equals(userProfile.getCity())) {
+            String old = userProfile.getCity();
+            userProfile.setCity(request.getCity());
+            broadcastProfileChange(email, "city", old, request.getCity(), timeStr);
+        }
+        if (request.getDateOfBirth() != null && !request.getDateOfBirth().equals(userProfile.getDateOfBirth())) {
+            String old = userProfile.getDateOfBirth() != null ? userProfile.getDateOfBirth().toString() : "null";
+            userProfile.setDateOfBirth(request.getDateOfBirth());
+            broadcastProfileChange(email, "date of birth", old, request.getDateOfBirth().toString(), timeStr);
         }
     }
 
-    // Helper method to broadcast profile changes in real-time
+    private void applyCountryUpdate(String email, UpdateUserRequest request,
+                                    UserProfile userProfile, String timeStr) {
+        if (request.getCountry() == null) return;
+
+        String oldCountry = userProfile.getCountry();
+        userProfile.setCountry(request.getCountry());
+
+        if (oldCountry != null && !oldCountry.equals(request.getCountry())) {
+            ProfileChangeHistory history = ProfileChangeHistory.builder()
+                    .email(email)
+                    .fieldChanged("country")
+                    .oldValue(oldCountry)
+                    .newValue(request.getCountry())
+                    .changedAt(LocalDateTime.now())
+                    .build();
+            profileChangeHistoryRepository.save(history);
+            log.info("Country change saved: {} from {} to {}", email, oldCountry, request.getCountry());
+            checkAndAlertSuspiciousCountryChanges(email);
+        } else if (oldCountry == null) {
+            log.info("First country set for {}: {}", email, request.getCountry());
+        }
+
+        broadcastProfileChange(email, "country",
+                oldCountry != null ? oldCountry : "Not set", request.getCountry(), timeStr);
+    }
+
+    private void applyRoleAndStatusUpdates(String email, UpdateUserRequest request,
+                                           UserProfile userProfile, Role oldRole, String timeStr) {
+        if (request.getRole() != null && request.getRole() != oldRole) {
+            String old = oldRole != null ? oldRole.name() : "null";
+            userProfile.setRole(request.getRole());
+            broadcastProfileChange(email, "role", old, request.getRole().name(), timeStr);
+        }
+        if (request.getActive() != null && request.getActive() != userProfile.isActive()) {
+            String old = String.valueOf(userProfile.isActive());
+            userProfile.setActive(request.getActive());
+            broadcastProfileChange(email, "active status", old, String.valueOf(request.getActive()), timeStr);
+        }
+    }
+
+    private void checkAndAlertSuspiciousCountryChanges(String email) {
+        LocalDateTime startOfDay = LocalDateTime.now().toLocalDate().atStartOfDay();
+        int countryChangesToday = profileChangeHistoryRepository.countCountryChangesToday(email, startOfDay);
+
+        if (countryChangesToday >= SUSPICIOUS_COUNTRY_CHANGE_THRESHOLD) {
+            blockUser(email, "Suspicious: " + countryChangesToday + " country changes in one day");
+            String alertMessage = String.format("SUSPICIOUS & BLOCKED: %s changed country %d times today. Account blocked.",
+                    email, countryChangesToday);
+            messagingTemplate.convertAndSend(TOPIC_LOGINS, alertMessage);
+            log.warn("Suspicious activity detected: {}", alertMessage);
+        }
+    }
+
     private void broadcastProfileChange(String email, String field, String oldValue, String newValue, String timeStr) {
-        String changeMessage = String.format("📝 PROFILE CHANGE: %s changed %s from '%s' to '%s' at %s",
+        String changeMessage = String.format("PROFILE CHANGE: %s changed %s from '%s' to '%s' at %s",
                 email, field, oldValue, newValue, timeStr);
-        messagingTemplate.convertAndSend("/topic/logins", changeMessage);
-        log.info("📡 BROADCAST: {}", changeMessage);
+        messagingTemplate.convertAndSend(TOPIC_LOGINS, changeMessage);
+        log.info("Broadcast: {}", changeMessage);
     }
 
     @Transactional
     public UserProfileDTO updateUser(Long id, UpdateUserRequest request) {
         UserProfile userProfile = userProfileRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("User not found with id: " + id));
+                .orElseThrow(() -> new IllegalArgumentException(USER_NOT_FOUND_ID + id));
 
         Role oldRole = userProfile.getRole();
-        boolean roleChanged = false;
 
         if (request.getFirstName() != null)   userProfile.setFirstName(request.getFirstName());
         if (request.getLastName() != null)    userProfile.setLastName(request.getLastName());
@@ -275,84 +281,90 @@ public class UserProfileService {
         if (request.getAddress() != null)     userProfile.setAddress(request.getAddress());
         if (request.getCity() != null)        userProfile.setCity(request.getCity());
         if (request.getCountry() != null)     userProfile.setCountry(request.getCountry());
-
-        if (request.getRole() != null && request.getRole() != oldRole) {
-            log.info("🔄 Role changing from {} to {}", oldRole, request.getRole());
-            userProfile.setRole(request.getRole());
-            roleChanged = true;
-
-            try {
-                keycloakAdminService.updateUserRole(userProfile.getEmail(), request.getRole().name());
-                log.info("✅ Role updated in Keycloak for: {}", userProfile.getEmail());
-            } catch (Exception e) {
-                log.error("❌ Failed to update role in Keycloak: {}", e.getMessage());
-            }
-
-            try {
-                String adminToken = extractAdminToken();
-                if (adminToken == null) {
-                    log.warn("⚠️ No admin token found, skipping auth service role update");
-                } else {
-                    RoleUpdateRequest roleUpdate = new RoleUpdateRequest();
-                    roleUpdate.setEmail(userProfile.getEmail());
-                    roleUpdate.setRole(request.getRole());
-                    AuthResponse response = authServiceClient.updateUserRole(roleUpdate, "Bearer " + adminToken);
-                    log.info("✅ Role updated in Auth Service: {}", response);
-                }
-            } catch (Exception e) {
-                log.error("❌ Failed to update role in Auth Service: {}", e.getMessage());
-            }
-        }
-
         if (request.getActive() != null)      userProfile.setActive(request.getActive());
         if (request.getDateOfBirth() != null) userProfile.setDateOfBirth(request.getDateOfBirth());
+
+        boolean roleChanged = applyRoleChange(userProfile, request, oldRole);
 
         userProfile.recordActivity();
         UserProfile updatedProfile = userProfileRepository.save(userProfile);
 
         if (roleChanged) {
-            try {
-                keycloakAdminService.logoutUserSessions(userProfile.getEmail());
-                publishLogoutEvent(userProfile.getEmail(),
-                        userProfile.getRole().name(),
-                        LoginHistory.LogoutType.FORCED);
-                log.info("✅ User force-logged out after role change: {}", userProfile.getEmail());
-            } catch (Exception e) {
-                log.error("⚠️ Could not force-logout user: {}", e.getMessage());
-            }
+            forceLogoutAfterRoleChange(userProfile);
         }
 
         return convertToDTO(updatedProfile);
+    }
+
+    private boolean applyRoleChange(UserProfile userProfile, UpdateUserRequest request, Role oldRole) {
+        if (request.getRole() == null || request.getRole() == oldRole) {
+            return false;
+        }
+        log.info("Role changing from {} to {} for {}", oldRole, request.getRole(), userProfile.getEmail());
+        userProfile.setRole(request.getRole());
+
+        try {
+            keycloakAdminService.updateUserRole(userProfile.getEmail(), request.getRole().name());
+            log.info("Role updated in Keycloak for: {}", userProfile.getEmail());
+        } catch (Exception e) {
+            log.error("Failed to update role in Keycloak: {}", e.getMessage());
+        }
+
+        try {
+            String adminToken = extractAdminToken();
+            if (adminToken == null) {
+                log.warn("No admin token found, skipping auth service role update");
+            } else {
+                RoleUpdateRequest roleUpdate = new RoleUpdateRequest();
+                roleUpdate.setEmail(userProfile.getEmail());
+                roleUpdate.setRole(request.getRole());
+                authServiceClient.updateUserRole(roleUpdate, BEARER_PREFIX + adminToken);
+                log.info("Role updated in Auth Service for: {}", userProfile.getEmail());
+            }
+        } catch (Exception e) {
+            log.error("Failed to update role in Auth Service: {}", e.getMessage());
+        }
+        return true;
+    }
+
+    private void forceLogoutAfterRoleChange(UserProfile userProfile) {
+        try {
+            keycloakAdminService.logoutUserSessions(userProfile.getEmail());
+            publishLogoutEvent(userProfile.getEmail(), userProfile.getRole().name(), LoginHistory.LogoutType.FORCED);
+            log.info("User force-logged out after role change: {}", userProfile.getEmail());
+        } catch (Exception e) {
+            log.error("Could not force-logout user: {}", e.getMessage());
+        }
     }
 
     // ── Queries ──────────────────────────────────────────────────────────────
 
     public UserProfileDTO getUserById(Long id) {
         return convertToDTO(userProfileRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("User not found with id: " + id)));
+                .orElseThrow(() -> new IllegalArgumentException(USER_NOT_FOUND_ID + id)));
     }
 
     public UserProfileDTO getUserByEmail(String email) {
         return convertToDTO(userProfileRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found with email: " + email)));
+                .orElseThrow(() -> new IllegalArgumentException(USER_NOT_FOUND_EMAIL + email)));
     }
 
     public List<UserProfileDTO> getAllUsers() {
         return userProfileRepository.findAll().stream()
                 .map(this::convertToDTO)
-                .collect(Collectors.toList());
+                .toList();
     }
 
     public List<UserProfileDTO> getUsersByRole(Role role) {
         return userProfileRepository.findByRole(role).stream()
                 .map(this::convertToDTO)
-                .collect(Collectors.toList());
+                .toList();
     }
 
     @Transactional
     public void deleteUser(Long id) {
         if (!userProfileRepository.existsById(id))
-            throw new RuntimeException("User not found with id: " + id);
+            throw new IllegalArgumentException(USER_NOT_FOUND_ID + id);
         userProfileRepository.deleteById(id);
     }
 
@@ -361,26 +373,24 @@ public class UserProfileService {
     @Transactional
     public void recordUserLogin(String email) {
         UserProfile userProfile = userProfileRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found with email: " + email));
+                .orElseThrow(() -> new IllegalArgumentException(USER_NOT_FOUND_EMAIL + email));
 
-        // Check if account is blocked
         if (userProfile.isBlocked()) {
-            throw new RuntimeException("Your account is blocked. Please check your email for reactivation instructions.");
+            throw new IllegalStateException("Your account is blocked. Please check your email for reactivation instructions.");
         }
 
         userProfile.recordLogin();
         userProfileRepository.save(userProfile);
-
-        log.info("✅ Login stats updated for: {}", email);
+        log.info("Login stats updated for: {}", email);
     }
 
     @Transactional
     public void recordUserLogout(String email, LoginHistory.LogoutType logoutType) {
         UserProfile userProfile = userProfileRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found with email: " + email));
+                .orElseThrow(() -> new IllegalArgumentException(USER_NOT_FOUND_EMAIL + email));
 
         publishLogoutEvent(email, userProfile.getRole().name(), logoutType);
-        log.info("✅ Logout recorded and published to RabbitMQ for: {} ({})", email, logoutType);
+        log.info("Logout recorded for: {} ({})", email, logoutType);
     }
 
     // ── Auth sync ─────────────────────────────────────────────────────────────
@@ -389,7 +399,7 @@ public class UserProfileService {
     public UserProfileDTO syncUserFromAuth(String email, String role) {
         Optional<UserProfile> existingProfile = userProfileRepository.findByEmail(email);
         if (existingProfile.isPresent()) {
-            log.info("✅ User already exists, returning: {}", email);
+            log.info("User already exists, returning: {}", email);
             return convertToDTO(existingProfile.get());
         }
 
@@ -403,7 +413,7 @@ public class UserProfileService {
                 .build();
 
         UserProfile savedProfile = userProfileRepository.save(newProfile);
-        log.info("✅ User synced from Auth and created: {}", email);
+        log.info("User synced from Auth and created: {}", email);
         return convertToDTO(savedProfile);
     }
 
@@ -417,7 +427,7 @@ public class UserProfileService {
     @Transactional
     public void blockUser(String email, String reason) {
         UserProfile user = userProfileRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found: " + email));
+                .orElseThrow(() -> new IllegalArgumentException(USER_NOT_FOUND + email));
 
         user.setBlocked(true);
         user.setBlockedAt(LocalDateTime.now());
@@ -425,49 +435,31 @@ public class UserProfileService {
         user.setActive(false);
         userProfileRepository.save(user);
 
-        // ✅ SEND REACTIVATION EMAIL TO STUDENT
-        sendReactivationEmail(email);
+        self.sendReactivationEmail(email);
 
-        String alertMessage = String.format("🔒 ACCOUNT BLOCKED: %s - %s at %s. Reactivation email sent.",
-                email, reason, LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")));
-        messagingTemplate.convertAndSend("/topic/logins", alertMessage);
-        log.info("🔒 User blocked: {}", email);
+        String alertMessage = String.format("ACCOUNT BLOCKED: %s - %s at %s. Reactivation email sent.",
+                email, reason, LocalDateTime.now().format(DateTimeFormatter.ofPattern(TIME_FORMAT)));
+        messagingTemplate.convertAndSend(TOPIC_LOGINS, alertMessage);
+        log.info("User blocked: {}", email);
     }
-
-//    @Transactional
-//    public void unblockUser(String email) {
-//        UserProfile user = userProfileRepository.findByEmail(email)
-//                .orElseThrow(() -> new RuntimeException("User not found: " + email));
-//
-//        user.setBlocked(false);
-//        user.setBlockedAt(null);
-//        user.setBlockedReason(null);
-//        user.setActive(true);
-//        userProfileRepository.save(user);
-//
-//        String alertMessage = String.format("🔓 ACCOUNT UNBLOCKED: %s at %s",
-//                email, LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")));
-//        messagingTemplate.convertAndSend("/topic/logins", alertMessage);
-//        log.info("🔓 User unblocked: {}", email);
-//    }
 
     // ── Reactivation methods ─────────────────────────────────────────────
 
     @Transactional
     public void sendReactivationEmail(String email) {
         UserProfile user = userProfileRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found: " + email));
+                .orElseThrow(() -> new IllegalArgumentException(USER_NOT_FOUND + email));
 
         // Generate unique token
         String token = UUID.randomUUID().toString();
         user.setReactivationToken(token);
-        user.setReactivationTokenExpiry(LocalDateTime.now().plusHours(24));
+        user.setReactivationTokenExpiry(LocalDateTime.now().plusHours(TOKEN_EXPIRY_HOURS));
         userProfileRepository.save(user);
 
         // Send email to student
         String reactivationLink = "http://localhost:4200/reactivate?token=" + token + "&email=" + email;
 
-        String subject = "🔐 Account Blocked - Reactivation Required";
+        String subject = "Account Blocked - Reactivation Required";
         String body = String.format("""
         Hello %s,
         
@@ -486,44 +478,8 @@ public class UserProfileService {
         );
 
         sendEmail(email, subject, body);
-        log.info("📧 Reactivation email sent to: {}", email);
+        log.info("Reactivation email sent to: {}", email);
     }
-
-//    @Transactional
-//    public void processReactivationRequest(Map<String, String> request) {
-//        String email = request.get("email");
-//        String reason = request.get("reason");
-//        String confirmation = request.get("confirmation");
-//
-//        UserProfile user = userProfileRepository.findByEmail(email)
-//                .orElseThrow(() -> new RuntimeException("User not found: " + email));
-//
-//        // Send email to ADMIN
-//        String adminEmail = "seddik202209@gmail.com";
-//        String subject = "📋 Reactivation Request from " + email;
-//        String body = String.format("""
-//        STUDENT REACTIVATION REQUEST
-//
-//        Student Email: %s
-//        Student Name: %s
-//        Reason provided: %s
-//        Confirmation: %s
-//
-//        To approve and unblock, click the link below:
-//        http://localhost:8089/api/users/unblock/%s
-//
-//        Or go to admin dashboard to unblock manually.
-//        """,
-//                email,
-//                user.getFirstName() + " " + (user.getLastName() != null ? user.getLastName() : ""),
-//                reason,
-//                confirmation,
-//                email
-//        );
-//
-//        sendEmail(adminEmail, subject, body);
-//        log.info("📧 Reactivation request sent to admin for: {}", email);
-//    }
 
     @Transactional
     public boolean validateReactivationToken(String token) {
@@ -531,11 +487,9 @@ public class UserProfileService {
                 .filter(u -> token.equals(u.getReactivationToken()))
                 .findFirst();
 
-        if (user.isPresent() && user.get().getReactivationTokenExpiry() != null &&
-                user.get().getReactivationTokenExpiry().isAfter(LocalDateTime.now())) {
-            return true;
-        }
-        return false;
+        return user.isPresent()
+                && user.get().getReactivationTokenExpiry() != null
+                && user.get().getReactivationTokenExpiry().isAfter(LocalDateTime.now());
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -587,8 +541,8 @@ public class UserProfileService {
                 (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
         if (attributes != null) {
             String authHeader = attributes.getRequest().getHeader("Authorization");
-            if (authHeader != null && authHeader.startsWith("Bearer ")) {
-                return authHeader.substring(7);
+            if (authHeader != null && authHeader.startsWith(BEARER_PREFIX)) {
+                return authHeader.substring(BEARER_PREFIX.length());
             }
         }
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
@@ -601,14 +555,14 @@ public class UserProfileService {
     private void sendEmail(String to, String subject, String body) {
         try {
             SimpleMailMessage message = new SimpleMailMessage();
-            message.setFrom("seddik202209@gmail.com");
+            message.setFrom(mailFrom);
             message.setTo(to);
             message.setSubject(subject);
             message.setText(body);
             mailSender.send(message);
-            log.info("✅ Email sent to: {}", to);
+            log.info("Email sent to: {}", to);
         } catch (Exception e) {
-            log.error("❌ Failed to send email to {}: {}", to, e.getMessage());
+            log.error("Failed to send email to {}: {}", to, e.getMessage());
         }
     }
 
@@ -640,11 +594,10 @@ public class UserProfileService {
 
 
 
-    // UPDATE THIS METHOD - Add email to student when unblocked
     @Transactional
     public void unblockUser(String email) {
         UserProfile user = userProfileRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found: " + email));
+                .orElseThrow(() -> new IllegalArgumentException(USER_NOT_FOUND + email));
 
         user.setBlocked(false);
         user.setBlockedAt(null);
@@ -652,8 +605,7 @@ public class UserProfileService {
         user.setActive(true);
         userProfileRepository.save(user);
 
-        // ✅ SEND NOTIFICATION EMAIL TO STUDENT
-        String studentSubject = "✅ Your Account Has Been Reactivated";
+        String studentSubject = "Your Account Has Been Reactivated";
         String studentBody = String.format("""
     Hello %s,
     
@@ -669,16 +621,14 @@ public class UserProfileService {
                 user.getFirstName() != null && !user.getFirstName().isEmpty() ? user.getFirstName() : user.getEmail()
         );
         sendEmail(email, studentSubject, studentBody);
-        log.info("📧 Reactivation confirmation email sent to student: {}", email);
+        log.info("Reactivation confirmation email sent to student: {}", email);
 
-        // Broadcast to admin dashboard
-        String alertMessage = String.format("🔓 ACCOUNT UNBLOCKED: %s at %s. Student notified.",
-                email, LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")));
-        messagingTemplate.convertAndSend("/topic/logins", alertMessage);
-        log.info("🔓 User unblocked: {}", email);
+        String alertMessage = String.format("ACCOUNT UNBLOCKED: %s at %s. Student notified.",
+                email, LocalDateTime.now().format(DateTimeFormatter.ofPattern(TIME_FORMAT)));
+        messagingTemplate.convertAndSend(TOPIC_LOGINS, alertMessage);
+        log.info("User unblocked: {}", email);
     }
 
-    // UPDATE THIS METHOD - Change admin email to use Angular link
     @Transactional
     public void processReactivationRequest(Map<String, String> request) {
         String email = request.get("email");
@@ -686,11 +636,10 @@ public class UserProfileService {
         String confirmation = request.get("confirmation");
 
         UserProfile user = userProfileRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found: " + email));
+                .orElseThrow(() -> new IllegalArgumentException(USER_NOT_FOUND + email));
 
         // Send email to ADMIN with Angular link
-        String adminEmail = "seddik202209@gmail.com";
-        String subject = "📋 Reactivation Request from " + email;
+        String subject = "Reactivation Request from " + email;
         String body = String.format("""
     STUDENT REACTIVATION REQUEST
     
@@ -712,6 +661,6 @@ public class UserProfileService {
         );
 
         sendEmail(adminEmail, subject, body);
-        log.info("📧 Reactivation request sent to admin for: {}", email);
+        log.info("Reactivation request sent to admin for: {}", email);
     }
 }

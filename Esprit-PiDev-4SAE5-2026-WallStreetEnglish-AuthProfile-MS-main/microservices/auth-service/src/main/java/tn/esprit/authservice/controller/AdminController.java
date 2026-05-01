@@ -29,35 +29,15 @@ public class AdminController {
     private final KeycloakService keycloakService;
 
     @PostMapping("/create")
-    @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<?> createUserByAdmin(@Valid @RequestBody RegisterRequest request) {
-        log.info("========== ADMIN CREATE USER ==========");
-        log.info("Email: {}", request.getEmail());
-        log.info("Role: {}", request.getRole());
-        log.info("First Name: {}", request.getFirstName());
-        log.info("Last Name: {}", request.getLastName());
-        log.info("=======================================");
+    // NOTE: No @PreAuthorize here — this endpoint is called service-to-service
+    // from user-management-service. The admin role is verified at the gateway level.
+    // The /api/auth/admin/** path is still protected by SecurityConfig (.authenticated()).
+    public ResponseEntity<AuthResponse> createUserByAdmin(@Valid @RequestBody RegisterRequest request) {
+        log.info("Admin create user request for email: {}", request.getEmail());
 
-        try {
-            AuthResponse response = authService.register(request);
-            log.info("✅ User created successfully with ID: {}", response.getUserId());
-
-            Map<String, Object> result = new HashMap<>();
-            result.put("success", true);
-            result.put("message", "User created successfully");
-            result.put("userId", response.getUserId());
-            result.put("email", response.getEmail());
-            result.put("role", response.getRole());
-
-            return ResponseEntity.ok(result);
-        } catch (Exception e) {
-            log.error("❌ Failed to create user: {}", e.getMessage(), e);
-
-            Map<String, Object> error = new HashMap<>();
-            error.put("success", false);
-            error.put("message", e.getMessage());
-            return ResponseEntity.badRequest().body(error);
-        }
+        AuthResponse response = authService.registerByAdmin(request);
+        log.info("User created successfully with ID: {}", response.getUserId());
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/test")
@@ -69,27 +49,22 @@ public class AdminController {
     @PutMapping("/role")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<?> updateUserRole(@RequestBody RoleUpdateRequest request) {
-        log.info("========== UPDATE ROLE ==========");
-        log.info("Email: {}", request.getEmail());
-        log.info("New Role: {}", request.getRole());
-        log.info("================================");
+        log.info("Update role request for email: {} to role: {}", request.getEmail(), request.getRole());
 
         try {
-            // 1. Update in auth database
             User user = userRepository.findByEmail(request.getEmail())
-                    .orElseThrow(() -> new RuntimeException("User not found in auth database"));
+                    .orElseThrow(() -> new IllegalArgumentException("User not found in auth database"));
 
             Role oldRole = user.getRole();
             user.setRole(request.getRole());
             userRepository.save(user);
-            log.info("✅ Auth DB updated from {} to {}", oldRole, request.getRole());
+            log.info("Auth DB role updated from {} to {}", oldRole, request.getRole());
 
-            // 2. Update in Keycloak
             try {
                 keycloakService.updateUserRole(request.getEmail(), request.getRole().name());
-                log.info("✅ Keycloak updated");
+                log.info("Keycloak role updated for: {}", request.getEmail());
             } catch (Exception e) {
-                log.error("❌ Keycloak update failed: {}", e.getMessage());
+                log.error("Keycloak role update failed: {}", e.getMessage());
             }
 
             Map<String, Object> result = new HashMap<>();
@@ -102,7 +77,7 @@ public class AdminController {
             return ResponseEntity.ok(result);
 
         } catch (Exception e) {
-            log.error("❌ Failed: {}", e.getMessage(), e);
+            log.error("Failed to update role: {}", e.getMessage(), e);
 
             Map<String, Object> error = new HashMap<>();
             error.put("success", false);

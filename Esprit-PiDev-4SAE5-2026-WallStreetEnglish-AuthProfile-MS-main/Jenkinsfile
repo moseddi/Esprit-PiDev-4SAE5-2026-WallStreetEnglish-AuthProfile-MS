@@ -1,0 +1,132 @@
+pipeline {
+    agent any
+
+    environment {
+        SONAR_HOST_URL = 'http://localhost:9000'
+        SONAR_TOKEN = credentials('jenkins-user')
+        ROOT = 'Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "✅ Code récupéré depuis GitHub"
+            }
+        }
+
+        stage('Install Parent POM') {
+            steps {
+                dir("${ROOT}") {
+                    sh 'mvn clean install -N -B'
+                }
+                echo "✅ Parent POM installé"
+            }
+        }
+
+        stage('Tests - Auth Service') {
+            steps {
+                dir("${ROOT}/microservices/auth-service") {
+                    sh 'mvn clean verify -B'
+                }
+                echo "✅ Tests Auth Service passés"
+            }
+            post {
+                always {
+                    junit(
+                        testResults: "${ROOT}/microservices/auth-service/target/surefire-reports/*.xml",
+                        allowEmptyResults: true
+                    )
+                }
+            }
+        }
+
+        stage('Tests - User Service') {
+            steps {
+                dir("${ROOT}/microservices/user-management-service") {
+                    sh 'mvn clean verify -B'
+                }
+                echo "✅ Tests User Service passés"
+            }
+            post {
+                always {
+                    junit(
+                        testResults: "${ROOT}/microservices/user-management-service/target/surefire-reports/*.xml",
+                        allowEmptyResults: true
+                    )
+                }
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('sq1') {
+                    dir("${ROOT}/microservices/auth-service") {
+                        sh """
+                            mvn sonar:sonar \
+                                -Dsonar.projectKey=auth-service \
+                                -Dsonar.projectName="Auth Service" \
+                                -Dsonar.login=${SONAR_TOKEN} \
+                                -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+                        """
+                    }
+                    dir("${ROOT}/microservices/user-management-service") {
+                        sh """
+                            mvn sonar:sonar \
+                                -Dsonar.projectKey=user-service \
+                                -Dsonar.projectName="User Management Service" \
+                                -Dsonar.login=${SONAR_TOKEN} \
+                                -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+                        """
+                    }
+                }
+                echo "✅ Analyse SonarQube terminée"
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                echo "✅ Quality Gate - dispensé par l'enseignante"
+            }
+        }
+
+        stage('Build Docker Images') {
+            steps {
+                echo "🐳 Construction des images Docker..."
+                dir("${ROOT}") {
+                    sh """
+                        docker build \
+                            -t wallstreet/auth-service:${env.BUILD_NUMBER} \
+                            -t wallstreet/auth-service:latest \
+                            -f microservices/auth-service/Dockerfile \
+                            microservices/auth-service
+                    """
+                    sh """
+                        docker build \
+                            -t wallstreet/user-management-service:${env.BUILD_NUMBER} \
+                            -t wallstreet/user-management-service:latest \
+                            -f microservices/user-management-service/Dockerfile \
+                            microservices/user-management-service
+                    """
+                }
+                echo "✅ Images prêtes : wallstreet/auth-service:${env.BUILD_NUMBER} | wallstreet/user-management-service:${env.BUILD_NUMBER}"
+            }
+        }
+    }
+
+    post {
+        success {
+            echo """
+🎉 CI Pipeline terminé avec succès! Build #${env.BUILD_NUMBER}
+📊 SonarQube : ${SONAR_HOST_URL}
+🐳 Images Docker prêtes :
+   wallstreet/auth-service:${env.BUILD_NUMBER}
+   wallstreet/user-management-service:${env.BUILD_NUMBER}
+"""
+        }
+        failure {
+            echo "❌ Pipeline CI échoué"
+        }
+    }
+}

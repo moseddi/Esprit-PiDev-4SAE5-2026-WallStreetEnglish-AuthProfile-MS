@@ -7,6 +7,7 @@ import org.keycloak.admin.client.Keycloak;
 import org.keycloak.representations.idm.CredentialRepresentation;
 import org.keycloak.representations.idm.UserRepresentation;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
@@ -25,11 +26,17 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
 @Slf4j
 @RestController
 @RequestMapping("/api/auth")
 @RequiredArgsConstructor
 public class AuthController {
+
+    private static final String FIELD_MESSAGE = "message";
+    private static final String FIELD_SUCCESS = "success";
+
     private final UserRepository userRepository;
     private final AuthService authService;
     private final UserServiceClient userServiceClient;
@@ -38,7 +45,12 @@ public class AuthController {
 
     @Value("${keycloak.realm}")
     private String realm;
-    private static Map<String, String> resetTokens = new HashMap<>();
+
+    @Value("${app.mail.from:noreply@wallstreetenglish.com}")
+    private String mailFrom;
+
+    /** Thread-safe store for password-reset tokens (token → Keycloak userId). */
+    private static final Map<String, String> resetTokens = new ConcurrentHashMap<>();
 
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest request) {
@@ -47,19 +59,15 @@ public class AuthController {
 
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
-        // Do login first and store the response
         AuthResponse response = authService.login(request);
 
-        // Record login activity in User Service
         try {
             userServiceClient.recordUserLogin(request.getEmail());
-            System.out.println("✅ Login recorded for: " + request.getEmail());
+            log.info("Login recorded for: {}", request.getEmail());
         } catch (Exception e) {
-            // Log error but don't fail the login
-            System.err.println("⚠️ Failed to record login activity: " + e.getMessage());
+            log.warn("Failed to record login activity: {}", e.getMessage());
         }
 
-        // Return the response
         return ResponseEntity.ok(response);
     }
 
@@ -69,92 +77,66 @@ public class AuthController {
     }
 
     @PostMapping("/check-password")
-    public String checkPassword(@RequestBody LoginRequest request) {
+    public ResponseEntity<String> checkPassword(@RequestBody LoginRequest request) {
         User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
         BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
         boolean match = encoder.matches(request.getPassword(), user.getPassword());
 
-        return "Password matches: " + match +
+        String result = "Password matches: " + match +
                 "\nUser active: " + user.isActive() +
-                "\nEmail verified: " + user.isEmailVerified() +
-                "\nHash: " + user.getPassword();
+                "\nEmail verified: " + user.isEmailVerified();
+        return ResponseEntity.ok(result);
     }
+
     @PostMapping("/forgot-password")
-    public ResponseEntity<?> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
-        log.info("========== FORGOT PASSWORD REQUEST ==========");
-        log.info("Email: {}", request.getEmail());
+    public ResponseEntity<Map<String, Object>> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        log.info("Forgot password request for email: {}", request.getEmail());
 
         try {
-            // Récupère TOUS les utilisateurs
             List<UserRepresentation> allUsers = keycloakAdmin.realm(realm).users().list();
-            log.info("📊 TOTAL utilisateurs dans Keycloak: {}", allUsers.size());
-
-            // Cherche l'utilisateur manuellement
-            UserRepresentation foundUser = null;
-            String searchEmail = request.getEmail().toLowerCase().trim();
-
-            for (UserRepresentation user : allUsers) {
-                if (user.getEmail() != null && user.getEmail().toLowerCase().trim().equals(searchEmail)) {
-                    foundUser = user;
-                    log.info("✅ Trouvé par EMAIL: {}", user.getEmail());
-                    break;
-                }
-                if (user.getUsername() != null && user.getUsername().toLowerCase().trim().equals(searchEmail)) {
-                    foundUser = user;
-                    log.info("✅ Trouvé par USERNAME: {}", user.getUsername());
-                    break;
-                }
-            }
+            UserRepresentation foundUser = findUserInKeycloak(allUsers, request.getEmail());
 
             if (foundUser != null) {
-                log.info("✅ Utilisateur trouvé: ID={}", foundUser.getId());
-
-                // Générer token
                 String token = UUID.randomUUID().toString();
-
-                // ★★★ SAUVEGARDE DANS LA MAP STATIC ★★★
                 resetTokens.put(token, foundUser.getId());
-                log.info("📝 Token sauvegardé: {} pour l'utilisateur {}", token, foundUser.getId());
-                log.info("📝 Tokens disponibles: {}", resetTokens.keySet());
-
-                // Lien vers TA page Angular
                 String resetLink = "http://localhost:4200/reset-password?token=" + token;
-
-                // Envoyer email
                 sendResetEmail(request.getEmail(), resetLink);
-
-                log.info("✅ Email envoyé à {} avec lien: {}", request.getEmail(), resetLink);
+                log.info("Password reset email sent to: {}", request.getEmail());
             } else {
-                log.warn("❌ Utilisateur NON trouvé: {}", request.getEmail());
-                // Affiche les 5 premiers utilisateurs pour debug
-                for (int i = 0; i < Math.min(5, allUsers.size()); i++) {
-                    UserRepresentation u = allUsers.get(i);
-                    log.info("User {}: Email='{}', Username='{}'", i+1, u.getEmail(), u.getUsername());
-                }
+                log.warn("User not found in Keycloak for email: {}", request.getEmail());
             }
 
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("message", "If your email exists, you will receive a password reset link.");
-            return ResponseEntity.ok(response);
-
         } catch (Exception e) {
-            log.error("❌ Error: {}", e.getMessage(), e);
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("message", "If your email exists, you will receive a password reset link.");
-            return ResponseEntity.ok(response);
+            log.error("Error processing forgot password request: {}", e.getMessage(), e);
         }
+
+        Map<String, Object> response = new HashMap<>();
+        response.put(FIELD_SUCCESS, true);
+        response.put(FIELD_MESSAGE, "If your email exists, you will receive a password reset link.");
+        return ResponseEntity.ok(response);
+    }
+
+    private UserRepresentation findUserInKeycloak(List<UserRepresentation> users, String email) {
+        String searchEmail = email.toLowerCase().trim();
+        for (UserRepresentation user : users) {
+            if (user.getEmail() != null && user.getEmail().toLowerCase().trim().equals(searchEmail)) {
+                return user;
+            }
+            if (user.getUsername() != null && user.getUsername().toLowerCase().trim().equals(searchEmail)) {
+                return user;
+            }
+        }
+        return null;
     }
 
     private void sendResetEmail(String to, String resetLink) {
         try {
             SimpleMailMessage message = new SimpleMailMessage();
-            message.setFrom("seddik202209@gmail.com");
+            message.setFrom(mailFrom);
             message.setTo(to);
-            message.setSubject("🔐 Reset your Wall Street English password");
+            message.setSubject("Reset your Wall Street English password");
             message.setText(
                     "Hello,\n\n" +
                             "You requested to reset your password.\n\n" +
@@ -163,45 +145,44 @@ public class AuthController {
                             "If you didn't request this, ignore this email.\n\n" +
                             "Wall Street English Team"
             );
-
             mailSender.send(message);
-            log.info("✅ Email sent successfully to: {}", to);
-
+            log.info("Email sent successfully to: {}", to);
         } catch (Exception e) {
-            log.error("❌ Failed to send email to {}: {}", to, e.getMessage());
+            log.error("Failed to send email to {}: {}", to, e.getMessage());
         }
     }
 
     @PostMapping("/reset-password")
-    public ResponseEntity<?> resetPassword(@RequestBody Map<String, String> request) {
-        log.info("========== RESET PASSWORD REQUEST ==========");
+    public ResponseEntity<Map<String, Object>> resetPassword(@RequestBody Map<String, String> request) {
+        log.info("Reset password request received");
 
         String token = request.get("token");
         String newPassword = request.get("newPassword");
         String confirmPassword = request.get("confirmPassword");
 
-        log.info("Token reçu: {}", token);
-        log.info("Tokens disponibles: {}", resetTokens.keySet());
-
         if (token == null || newPassword == null || confirmPassword == null) {
-            return ResponseEntity.badRequest().body(Map.of("message", "Missing required fields"));
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                    .body(Map.of(FIELD_MESSAGE, "Missing required fields"));
         }
 
         if (!newPassword.equals(confirmPassword)) {
-            return ResponseEntity.badRequest().body(Map.of("message", "Passwords do not match"));
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                    .body(Map.of(FIELD_MESSAGE, "Passwords do not match"));
         }
 
         if (newPassword.length() < 6) {
-            return ResponseEntity.badRequest().body(Map.of("message", "Password must be at least 6 characters"));
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                    .body(Map.of(FIELD_MESSAGE, "Password must be at least 6 characters"));
         }
 
         if (!resetTokens.containsKey(token)) {
-            log.error("❌ Token non trouvé: {}", token);
-            return ResponseEntity.badRequest().body(Map.of("message", "Invalid or expired token"));
+            log.warn("Invalid or expired reset token used");
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                    .body(Map.of(FIELD_MESSAGE, "Invalid or expired token"));
         }
 
         String userId = resetTokens.get(token);
-        log.info("✅ Token valide! UserId associé: {}", userId);
+        log.info("Valid reset token for user: {}", userId);
 
         try {
             CredentialRepresentation credential = new CredentialRepresentation();
@@ -210,70 +191,53 @@ public class AuthController {
             credential.setTemporary(false);
 
             keycloakAdmin.realm(realm).users().get(userId).resetPassword(credential);
-
-            // ★★★ SUPPRIME LE TOKEN APRÈS UTILISATION ★★★
             resetTokens.remove(token);
-            log.info("📝 Token supprimé, tokens restants: {}", resetTokens.keySet());
-
-            log.info("✅ Password reset successful for user: {}", userId);
+            log.info("Password reset successful for user: {}", userId);
 
             return ResponseEntity.ok(Map.of(
-                    "success", true,
-                    "message", "Password reset successfully"
+                    FIELD_SUCCESS, true,
+                    FIELD_MESSAGE, "Password reset successfully"
             ));
 
         } catch (Exception e) {
-            log.error("❌ Error resetting password: {}", e.getMessage(), e);
-            return ResponseEntity.badRequest().body(Map.of(
-                    "message", "Error resetting password: " + e.getMessage()
-            ));
+            log.error("Error resetting password: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of(FIELD_MESSAGE, "Error resetting password: " + e.getMessage()));
         }
     }
 
     @GetMapping("/validate-reset-token")
-    public ResponseEntity<?> validateResetToken(@RequestParam String token) {
+    public ResponseEntity<Map<String, Object>> validateResetToken(@RequestParam String token) {
         log.info("Validating reset token: {}", token);
 
         if (resetTokens.containsKey(token)) {
             return ResponseEntity.ok(Map.of("valid", true));
-        } else {
-            return ResponseEntity.badRequest().body(Map.of(
-                    "valid", false,
-                    "message", "Invalid or expired token"
-            ));
         }
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(Map.of("valid", false, FIELD_MESSAGE, "Invalid or expired token"));
     }
 
     @GetMapping("/test-email")
-    public String testEmail() {
+    public ResponseEntity<String> testEmail() {
         try {
             SimpleMailMessage message = new SimpleMailMessage();
-            message.setFrom("seddik202209@gmail.com");
-            message.setTo("seddik202209@gmail.com");
+            message.setFrom(mailFrom);
+            message.setTo(mailFrom);
             message.setSubject("TEST EMAIL");
-            message.setText("Si tu reçois ça, l'email fonctionne !");
-
+            message.setText("Email configuration is working correctly.");
             mailSender.send(message);
-            return "✅ Email test envoyé ! Vérifie ta boîte mail.";
+            return ResponseEntity.ok("Email test sent successfully.");
         } catch (Exception e) {
-            return "❌ Erreur: " + e.getMessage();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Error: " + e.getMessage());
         }
     }
 
-    //    @PostMapping("/logout")
-//    public ResponseEntity<AuthResponse> logout(
-//            @RequestParam String email,
-//            @RequestParam(defaultValue = "VOLUNTARY") String logoutType) {
-//        log.info("Logout request for: {} with type: {}", email, logoutType);
-//        return ResponseEntity.ok(authService.logout(email, logoutType));
-//    }
     @PostMapping("/logout")
     public ResponseEntity<AuthResponse> logout(
             @RequestParam String email,
             @RequestParam(defaultValue = "VOLUNTARY") String logoutType) {
-        log.info("📡 Logout endpoint called: {} ({})", email, logoutType);
+        log.info("Logout endpoint called: {} ({})", email, logoutType);
         return ResponseEntity.ok(authService.logout(email, logoutType));
     }
-
-
 }

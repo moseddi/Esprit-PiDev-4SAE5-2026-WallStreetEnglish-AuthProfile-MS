@@ -5,6 +5,7 @@ import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
@@ -16,6 +17,7 @@ import java.util.Map;
 import java.util.function.Function;
 
 @Service
+@Slf4j
 public class JwtService {
 
     @Value("${spring.jwt.secret}")
@@ -50,9 +52,7 @@ public class JwtService {
     }
 
     private String buildToken(Map<String, Object> extraClaims, UserDetails userDetails, long expiration) {
-        System.out.println("===== JWT DEBUG =====");
-        System.out.println("Extra claims received in JwtService: " + extraClaims);
-        System.out.println("UserDetails username: " + userDetails.getUsername());
+        log.debug("Building JWT token for user: {}", userDetails.getUsername());
 
         String token = Jwts
                 .builder()
@@ -63,7 +63,7 @@ public class JwtService {
                 .signWith(getSignInKey(), SignatureAlgorithm.HS256)
                 .compact();
 
-        System.out.println("Token built successfully");
+        log.debug("JWT token built successfully for user: {}", userDetails.getUsername());
         return token;
     }
 
