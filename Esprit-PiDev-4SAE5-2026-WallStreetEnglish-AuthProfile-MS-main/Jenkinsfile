@@ -124,6 +124,11 @@ pipeline {
    wallstreet/auth-service:${env.BUILD_NUMBER}
    wallstreet/user-management-service:${env.BUILD_NUMBER}
 """
+            // 🚀 Automatically trigger CD Pipeline
+            build job: 'CD-Pipeline',
+                  parameters: [string(name: 'BUILD_NUMBER', value: env.BUILD_NUMBER)],
+                  wait: false
+            echo "🚀 CD Pipeline déclenché automatiquement!"
         }
         failure {
             echo "❌ Pipeline CI échoué"
