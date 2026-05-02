@@ -1,0 +1,76 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_HUB_CREDENTIALS = credentials('dockerhub-credentials')
+        DOCKER_HUB_USER = 'mohamedseddikhafidh'
+        VM_IP = '192.168.168.128'
+    }
+
+    stages {
+
+        stage('Tag & Push to DockerHub') {
+            steps {
+                echo "🐳 Pushing images to DockerHub..."
+                sh """
+                    echo ${DOCKER_HUB_CREDENTIALS_PSW} | docker login -u ${DOCKER_HUB_USER} --password-stdin
+
+                    docker tag wallstreet/auth-service:${env.BUILD_NUMBER} ${DOCKER_HUB_USER}/auth-service:${env.BUILD_NUMBER}
+                    docker tag wallstreet/auth-service:latest ${DOCKER_HUB_USER}/auth-service:latest
+                    docker push ${DOCKER_HUB_USER}/auth-service:${env.BUILD_NUMBER}
+                    docker push ${DOCKER_HUB_USER}/auth-service:latest
+
+                    docker tag wallstreet/user-management-service:${env.BUILD_NUMBER} ${DOCKER_HUB_USER}/user-management-service:${env.BUILD_NUMBER}
+                    docker tag wallstreet/user-management-service:latest ${DOCKER_HUB_USER}/user-management-service:latest
+                    docker push ${DOCKER_HUB_USER}/user-management-service:${env.BUILD_NUMBER}
+                    docker push ${DOCKER_HUB_USER}/user-management-service:latest
+                """
+                echo "✅ Images pushed to DockerHub"
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                echo "☸️ Deploying to Kubernetes..."
+                sh """
+                    kubectl set image deployment/auth-service \
+                        auth-service=${DOCKER_HUB_USER}/auth-service:${env.BUILD_NUMBER}
+
+                    kubectl set image deployment/user-service \
+                        user-service=${DOCKER_HUB_USER}/user-management-service:${env.BUILD_NUMBER}
+
+                    kubectl rollout status deployment/auth-service
+                    kubectl rollout status deployment/user-service
+                """
+                echo "✅ Deployed to Kubernetes"
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                sh """
+                    kubectl get pods
+                    kubectl get svc
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo """
+🎉 CD Pipeline terminé avec succès! Build #${env.BUILD_NUMBER}
+☸️ Kubernetes updated:
+   auth-service:${env.BUILD_NUMBER}
+   user-management-service:${env.BUILD_NUMBER}
+🌐 Services:
+   Keycloak: http://${VM_IP}:32295
+   Eureka: http://${VM_IP}:32027
+   RabbitMQ: http://${VM_IP}:31803
+"""
+        }
+        failure {
+            echo "❌ CD Pipeline échoué"
+        }
+    }
+}
