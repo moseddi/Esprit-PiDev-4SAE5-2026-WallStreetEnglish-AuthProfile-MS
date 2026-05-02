@@ -4,6 +4,8 @@ pipeline {
     environment {
         SONAR_HOST_URL = 'http://localhost:9000'
         SONAR_TOKEN = credentials('jenkins-user')
+        DOCKER_HUB_CREDENTIALS = credentials('dockerhub-credentials')
+        DOCKER_HUB_USER = 'mohamedseddikhafidh'
         ROOT = 'Esprit-PiDev-4SAE5-2026-WallStreetEnglish-AuthProfile-MS-main'
     }
 
@@ -91,26 +93,32 @@ pipeline {
             }
         }
 
-        stage('Build Docker Images') {
+        stage('Build & Push Docker Images') {
             steps {
                 echo "🐳 Construction des images Docker..."
+                sh "echo ${DOCKER_HUB_CREDENTIALS_PSW} | docker login -u ${DOCKER_HUB_USER} --password-stdin"
                 dir("${ROOT}") {
                     sh """
                         docker build \
-                            -t wallstreet/auth-service:${env.BUILD_NUMBER} \
-                            -t wallstreet/auth-service:latest \
+                            -t ${DOCKER_HUB_USER}/auth-service:${env.BUILD_NUMBER} \
+                            -t ${DOCKER_HUB_USER}/auth-service:latest \
                             -f microservices/auth-service/Dockerfile \
                             microservices/auth-service
-                    """
-                    sh """
+
+                        docker push ${DOCKER_HUB_USER}/auth-service:${env.BUILD_NUMBER}
+                        docker push ${DOCKER_HUB_USER}/auth-service:latest
+
                         docker build \
-                            -t wallstreet/user-management-service:${env.BUILD_NUMBER} \
-                            -t wallstreet/user-management-service:latest \
+                            -t ${DOCKER_HUB_USER}/user-management-service:${env.BUILD_NUMBER} \
+                            -t ${DOCKER_HUB_USER}/user-management-service:latest \
                             -f microservices/user-management-service/Dockerfile \
                             microservices/user-management-service
+
+                        docker push ${DOCKER_HUB_USER}/user-management-service:${env.BUILD_NUMBER}
+                        docker push ${DOCKER_HUB_USER}/user-management-service:latest
                     """
                 }
-                echo "✅ Images prêtes : wallstreet/auth-service:${env.BUILD_NUMBER} | wallstreet/user-management-service:${env.BUILD_NUMBER}"
+                echo "✅ Images poussées sur DockerHub"
             }
         }
     }
@@ -120,14 +128,11 @@ pipeline {
             echo """
 🎉 CI Pipeline terminé avec succès! Build #${env.BUILD_NUMBER}
 📊 SonarQube : ${SONAR_HOST_URL}
-🐳 Images Docker prêtes :
-   wallstreet/auth-service:${env.BUILD_NUMBER}
-   wallstreet/user-management-service:${env.BUILD_NUMBER}
+🐳 Images Docker poussées :
+   ${DOCKER_HUB_USER}/auth-service:${env.BUILD_NUMBER}
+   ${DOCKER_HUB_USER}/user-management-service:${env.BUILD_NUMBER}
 """
-            // 🚀 Automatically trigger CD Pipeline
-            build job: 'CD-Pipeline',
-                  parameters: [string(name: 'BUILD_NUMBER', value: env.BUILD_NUMBER)],
-                  wait: false
+            build job: 'CD-Pipeline', wait: false
             echo "🚀 CD Pipeline déclenché automatiquement!"
         }
         failure {
