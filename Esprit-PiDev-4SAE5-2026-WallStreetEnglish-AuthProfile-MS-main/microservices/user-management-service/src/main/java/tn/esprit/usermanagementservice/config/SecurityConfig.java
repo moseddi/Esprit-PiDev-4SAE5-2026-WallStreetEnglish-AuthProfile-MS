@@ -8,10 +8,19 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2Error;
+import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtTimestampValidator;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.web.cors.CorsConfiguration;
+
+import java.util.Arrays;
+import java.util.List;
 
 @Configuration
 @EnableWebSecurity
@@ -27,11 +36,27 @@ public class SecurityConfig {
     @Value("${spring.security.oauth2.resourceserver.jwt.jwk-set-uri}")
     private String jwkSetUri;
 
+    private static final List<String> TRUSTED_ISSUERS = List.of(
+            "http://localhost:6083/realms/myapp2",
+            "http://keycloak:8080/realms/myapp2",
+            "http://192.168.168.128:32295/realms/myapp2"
+    );
+
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
-                .cors(cors -> cors.disable())
+                .cors(cors -> cors.configurationSource(request -> {
+                    CorsConfiguration config = new CorsConfiguration();
+                    config.setAllowedOriginPatterns(Arrays.asList(
+                            "http://192.168.168.128:32708",
+                            "http://localhost:4200"
+                    ));
+                    config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+                    config.setAllowedHeaders(Arrays.asList("*"));
+                    config.setAllowCredentials(true);
+                    return config;
+                }))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/users/from-auth").permitAll()
                         .requestMatchers("/api/users/record-login").permitAll()
@@ -84,26 +109,26 @@ public class SecurityConfig {
 
     @Bean
     public JwtDecoder jwtDecoder() {
-        log.info("🔐 Initializing Flexible JwtDecoder for Issuer: {} and JWKS: {}", issuerUri, jwkSetUri);
+        log.info("🔐 Initializing Flexible JwtDecoder — JWKS: {}", jwkSetUri);
+        log.info("✅ Trusted issuers: {}", TRUSTED_ISSUERS);
+
         NimbusJwtDecoder jwtDecoder = NimbusJwtDecoder.withJwkSetUri(jwkSetUri).build();
-        
-        // We allow both the public issuer (localhost:6083) and the internal one (keycloak:8080)
-        String internalIssuer = "http://keycloak:8080/realms/myapp2";
-        
-        org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator<org.springframework.security.oauth2.jwt.Jwt> validator = 
-            new org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator<>(
-                new org.springframework.security.oauth2.jwt.JwtTimestampValidator(),
-                jwt -> {
-                    String iss = jwt.getIssuer().toString();
-                    if (iss.equals(issuerUri) || iss.equals(internalIssuer)) {
-                        return org.springframework.security.oauth2.core.OAuth2TokenValidatorResult.success();
-                    }
-                    log.warn("❌ Invalid Issuer in token: {}. Expected either {} or {}", iss, issuerUri, internalIssuer);
-                    return org.springframework.security.oauth2.core.OAuth2TokenValidatorResult.failure(
-                        new org.springframework.security.oauth2.core.OAuth2Error("invalid_token", "The issuer is not trusted", null));
-                }
-            );
-        
+
+        DelegatingOAuth2TokenValidator<Jwt> validator =
+                new DelegatingOAuth2TokenValidator<>(
+                        new JwtTimestampValidator(),
+                        jwt -> {
+                            String iss = jwt.getIssuer().toString();
+                            if (TRUSTED_ISSUERS.contains(iss)) {
+                                return OAuth2TokenValidatorResult.success();
+                            }
+                            log.warn("❌ Untrusted issuer: {}", iss);
+                            return OAuth2TokenValidatorResult.failure(
+                                    new OAuth2Error("invalid_token", "Untrusted issuer: " + iss, null)
+                            );
+                        }
+                );
+
         jwtDecoder.setJwtValidator(validator);
         return jwtDecoder;
     }

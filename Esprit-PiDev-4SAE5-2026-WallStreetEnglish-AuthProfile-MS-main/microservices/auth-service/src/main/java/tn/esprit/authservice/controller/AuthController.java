@@ -101,7 +101,7 @@ public class AuthController {
             if (foundUser != null) {
                 String token = UUID.randomUUID().toString();
                 resetTokens.put(token, foundUser.getId());
-                String resetLink = "http://localhost:4200/reset-password?token=" + token;
+                String resetLink = "http://192.168.168.128:32708/reset-password?token=" + token;
                 sendResetEmail(request.getEmail(), resetLink);
                 log.info("Password reset email sent to: {}", request.getEmail());
             } else {

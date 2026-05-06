@@ -85,7 +85,6 @@ public class AuthService {
     @Value("${user.service.url:http://localhost:8082}")
     private String userServiceUrl;
 
-    // Custom exceptions as inner classes
     static class EmailAlreadyExistsException extends RuntimeException {
         public EmailAlreadyExistsException(String message) { super(message); }
     }
@@ -370,7 +369,7 @@ public class AuthService {
 
     private void syncUserRoleIfNeeded(User user, Role roleFromJwt) {
         if (roleFromJwt != null && roleFromJwt != user.getRole()) {
-            log.info("🔄 Role mismatch detected for {}: DB={} JWT={} — syncing local DB",
+            log.info("🔄 Role mismatch detected for {}: DB={} Keycloak Token={} — forcing database synchronization.",
                     user.getEmail(), user.getRole(), roleFromJwt);
             user.setRole(roleFromJwt);
             userRepository.save(user);
@@ -393,10 +392,13 @@ public class AuthService {
 
             String accessToken = (String) tokenResponse.get(TOKEN_FIELD_ACCESS_TOKEN);
             Role roleFromJwt = extractRoleFromJwt(accessToken);
-            Role effectiveRole = determineEffectiveRole(user, roleFromJwt);
 
-            syncUserRoleIfNeeded(user, roleFromJwt);
-            log.info("✅ Effective role for login response: {}", effectiveRole);
+            if (roleFromJwt != null) {
+                syncUserRoleIfNeeded(user, roleFromJwt);
+            }
+
+            Role effectiveRole = determineEffectiveRole(user, roleFromJwt);
+            log.info("✅ Final effective role evaluated for login response: {}", effectiveRole);
 
             recordUserLogin(request);
             sendLoginEventToRabbitMQ(user);
@@ -421,7 +423,7 @@ public class AuthService {
     private Role determineEffectiveRole(User user, Role roleFromJwt) {
         Role effectiveRole = (roleFromJwt != null) ? roleFromJwt : user.getRole();
         if (roleFromJwt == null) {
-            log.warn("⚠️ No business role found in JWT for {}, falling back to DB role: {}", user.getEmail(), effectiveRole);
+            log.warn("⚠️ No business role found in JWT payload for {}, falling back to local DB entry: {}", user.getEmail(), effectiveRole);
         }
         return effectiveRole;
     }
@@ -505,27 +507,58 @@ public class AuthService {
             if (mod != 0) padded = padded + "=".repeat(4 - mod);
 
             String payload = new String(java.util.Base64.getUrlDecoder().decode(padded));
+            log.info("🔍 DEBUG KEYCLOAK CLAIMS PAYLOAD: {}", payload);
+
             com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
             @SuppressWarnings("unchecked")
             Map<String, Object> claims = mapper.readValue(payload, Map.class);
 
-            @SuppressWarnings("unchecked")
-            Map<String, Object> realmAccess = (Map<String, Object>) claims.get("realm_access");
-            if (realmAccess != null) {
-                @SuppressWarnings("unchecked")
-                java.util.List<String> roles = (java.util.List<String>) realmAccess.get("roles");
-                if (roles != null) {
-                    for (String r : roles) {
-                        try {
-                            return Role.valueOf(r);
-                        } catch (IllegalArgumentException ignored) {
-                            // Not a business role, skip
+            Role highestRole = null;
+
+            // 🛠️ LAYER 1: Standard Keycloak Realm Mapping
+            if (claims.get("realm_access") instanceof Map<?, ?> realmAccess) {
+                if (realmAccess.get("roles") instanceof java.util.List<?> roles) {
+                    for (Object r : roles) {
+                        String clean = String.valueOf(r).toUpperCase().replace("ROLE_", "").trim();
+                        if (clean.equals("ADMIN")) return Role.ADMIN;
+                        if (clean.equals("TUTOR") || clean.equals("TUTOR")) highestRole = Role.TUTOR;
+                        if (clean.equals("STUDENT") && highestRole == null) highestRole = Role.STUDENT;
+                    }
+                }
+            }
+
+            // 🛠️ LAYER 2: Client Role Mapping (resource_access)
+            if (highestRole != Role.ADMIN && claims.get("resource_access") instanceof Map<?, ?> resourceAccess) {
+                for (Object clientConfigObj : resourceAccess.values()) {
+                    if (clientConfigObj instanceof Map<?, ?> clientConfig) {
+                        if (clientConfig.get("roles") instanceof java.util.List<?> roles) {
+                            for (Object r : roles) {
+                                String clean = String.valueOf(r).toUpperCase().replace("ROLE_", "").trim();
+                                if (clean.equals("ADMIN")) return Role.ADMIN;
+                                if (clean.equals("TUTOR") || clean.equals("TUTOR")) highestRole = Role.TUTOR;
+                                if (clean.equals("STUDENT") && highestRole == null) highestRole = Role.STUDENT;
+                            }
                         }
                     }
                 }
             }
+
+            // 🛠️ LAYER 3: Fallback check on root-level configurations
+            if (highestRole != Role.ADMIN && claims.containsKey("roles")) {
+                Object rolesObj = claims.get("roles");
+                if (rolesObj instanceof java.util.List<?> roleList) {
+                    for (Object obj : roleList) {
+                        String clean = String.valueOf(obj).toUpperCase().replace("ROLE_", "").trim();
+                        if (clean.equals("ADMIN")) return Role.ADMIN;
+                        if (clean.equals("TUTOR") || clean.equals("TUTOR")) highestRole = Role.TUTOR;
+                        if (clean.equals("STUDENT") && highestRole == null) highestRole = Role.STUDENT;
+                    }
+                }
+            }
+
+            return highestRole;
         } catch (Exception e) {
-            log.warn("⚠️ Could not extract role from JWT: {}", e.getMessage());
+            log.warn("⚠️ Could not extract role from login JWT payload: {}", e.getMessage());
         }
         return null;
     }

@@ -457,7 +457,7 @@ public class UserProfileService {
         userProfileRepository.save(user);
 
         // Send email to student
-        String reactivationLink = "http://localhost:4200/reactivate?token=" + token + "&email=" + email;
+        String reactivationLink = "http://192.168.168.128:32708/reactivate?token=" + token + "&email=" + email;
 
         String subject = "Account Blocked - Reactivation Required";
         String body = String.format("""
@@ -611,7 +611,7 @@ public class UserProfileService {
     
     Great news! Your account has been successfully reactivated by the admin.
     
-    You can now log in to your account: http://localhost:4200/login
+    You can now log in to your account: http://192.168.168.128:32708/login
     
     If you have any issues, please contact support.
     
@@ -649,7 +649,7 @@ public class UserProfileService {
     Confirmation: %s
     
     To approve and unblock, click the link below:
-    http://localhost:4200/admin/unblock/%s
+    http://192.168.168.128:32708/admin/unblock/%s
     
     Or go to admin dashboard to unblock manually.
     """,

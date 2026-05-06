@@ -8,6 +8,7 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 import tn.esprit.authservice.repository.UserRepository;
 
 import java.util.ArrayList;
@@ -29,22 +30,62 @@ public class KeycloakJwtRoleConverter implements Converter<Jwt, Collection<Grant
 
     @Override
     @NonNull
+    @Transactional
     public Collection<GrantedAuthority> convert(@NonNull Jwt jwt) {
         Set<String> allRoles = new HashSet<>();
 
+        // 1. Extract raw roles from various layers of the Keycloak token
         extractRealmRoles(jwt, allRoles);
         extractResourceRoles(jwt, allRoles);
         extractTopLevelRoles(jwt, allRoles);
-        fallbackToDatabaseRole(jwt, allRoles);
 
-        if (allRoles.isEmpty()) {
-            log.warn("No roles found in token or database for user: {}", jwt.getClaimAsString("preferred_username"));
-        } else {
-            log.debug("Final authorities for {}: {}", jwt.getClaimAsString(CLAIM_EMAIL), allRoles);
+        // Standardize strings: strip "ROLE_" prefix if present and convert to uppercase
+        Set<String> cleanedRoles = new HashSet<>();
+        for (String r : allRoles) {
+            if (r != null) {
+                cleanedRoles.add(r.toUpperCase().replace("ROLE_", ""));
+            }
         }
 
+        // 2. Locate the primary business role coming from the Keycloak token
+        String tokenBusinessRole = cleanedRoles.stream()
+                .filter(r -> r.equals("ADMIN") || r.equals("STUDENT") || r.equals("TUTOR"))
+                .findFirst()
+                .orElse(null);
+
+        String email = jwt.getClaimAsString(CLAIM_EMAIL);
+
+        if (tokenBusinessRole != null && email != null) {
+            // Keycloak has a concrete business role. Verify and sync with local DB if mismatched.
+            userRepository.findByEmail(email).ifPresent(user -> {
+                if (!user.getRole().name().equalsIgnoreCase(tokenBusinessRole)) {
+                    log.info("🔄 Mismatch detected! Keycloak token says '{}' but Local DB says '{}'. Synchronizing Local DB for: {}",
+                            tokenBusinessRole, user.getRole().name(), email);
+                    try {
+                        user.setRole(tn.esprit.authservice.entity.Role.valueOf(tokenBusinessRole));
+                        userRepository.save(user);
+                    } catch (Exception e) {
+                        log.error("❌ Failed to sync token role to database for user {}", email, e);
+                    }
+                }
+            });
+        } else if (tokenBusinessRole == null && email != null) {
+            // Fallback to local database role only if Keycloak token completely lacks a business role
+            userRepository.findByEmail(email).ifPresent(user -> {
+                cleanedRoles.add(user.getRole().name());
+                log.debug("Fallback: No business role in token. Loaded database role for {}: {}", email, user.getRole());
+            });
+        }
+
+        if (cleanedRoles.isEmpty()) {
+            log.warn("No roles found in token or database for user: {}", jwt.getClaimAsString("preferred_username"));
+        } else {
+            log.info("Final evaluated roles for {}: {}", email, cleanedRoles);
+        }
+
+        // 3. Map final cleaned strings into proper Spring GrantedAuthorities
         List<GrantedAuthority> authorities = new ArrayList<>();
-        for (String role : allRoles) {
+        for (String role : cleanedRoles) {
             authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
         }
         return authorities;
@@ -86,21 +127,6 @@ public class KeycloakJwtRoleConverter implements Converter<Jwt, Collection<Grant
             });
         } else if (rolesObj instanceof String s) {
             allRoles.add(s);
-        }
-    }
-
-    private void fallbackToDatabaseRole(Jwt jwt, Set<String> allRoles) {
-        boolean hasBusinessRole = allRoles.stream()
-                .anyMatch(r -> r.equals("ADMIN") || r.equals("STUDENT") || r.equals("TUTOR"));
-
-        if (!hasBusinessRole) {
-            String email = jwt.getClaimAsString(CLAIM_EMAIL);
-            if (email != null) {
-                userRepository.findByEmail(email).ifPresent(user -> {
-                    allRoles.add(user.getRole().name());
-                    log.debug("Fallback: found role in database for {}: {}", email, user.getRole());
-                });
-            }
         }
     }
 }
